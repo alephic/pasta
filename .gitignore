@@ -3,4 +3,6 @@ data/*.json
 bin/
 lib/
 include/
+man/
+share/
 pip-selfcheck.json
