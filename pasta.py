@@ -91,7 +91,6 @@ class PastaEncoder(Model):
         )
     def forward(self, data_unsorted: Dataset):
         data_sorted = Dataset(sorted(data_unsorted.instances, key=lambda instance: len(instance.fields['text'].tokens), reverse=True))
-        data_sorted.index_instances(self.vocab)
         lengths = [len(instance.fields['text'].tokens) for instance in data_sorted.instances]
         array_dict = data_sorted.as_array_dict()
         embedded = self.text_field_embedder({
