@@ -1,3 +1,5 @@
 reddit_account.json
 data/*.json
 *.pyc
+highway_lstm/_ext
+highway_lstm/src/*.o
