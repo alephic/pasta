@@ -4,6 +4,7 @@ from torch.nn import Dropout
 
 class DropoutEmbedding(TokenEmbedder):
     def __init__(self, base: TokenEmbedder, dropout_rate: float):
+        super(DropoutEmbedding, self).__init__()
         self.base = base
         self.dropout = Dropout(p=dropout_rate)
     
