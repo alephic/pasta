@@ -48,6 +48,7 @@ class PastaEncoder(Model):
         char_emb_dropout = params.get('char_emb_dropout', 0.1)
         char_lstm_size = params.get('char_lstm_size', 128)
         char_encoding_dropout = params.get('char_encoding_dropout', 0.1)
+        latent_size = params.get('latent_size', 512)
         self.text_field_embedder = BasicTextFieldEmbedder({
             'tokens': DropoutEmbedding(Embedding(
                 vocab.get_vocab_size(namespace='tokens'),
@@ -70,22 +71,21 @@ class PastaEncoder(Model):
                 dropout=char_encoding_dropout
             )
         })
-        self.word_lstm = HighwayLSTMLayer(
+        self.word_enc_lstm = HighwayLSTMLayer(
             self.text_field_embedder.get_output_dim(),
             word_lstm_size,
             num_layers=word_lstm_layers,
             recurrent_dropout_prob=word_lstm_dropout
         )
-        self.word_output_project = nn.Linear(
+        self.word_dec_lstm_cells = nn.ModuleList([
+            nn.modules.LSTMCell(latent_size, word_lstm_size) for i in range(word_lstm_layers)
+        ])
+        self.word_dec_project = nn.Linear(
             word_lstm_size,
             vocab.get_vocab_size(namespace='tokens')
         )
-        self.char_output_lstm = nn.modules.LSTM(
-            word_lstm_size,
-            char_lstm_size,
-            batch_first=True
-        )
-        self.char_output_project = nn.Linear(
+        self.char_dec_lstm_cell = nn.modules.LSTMCell(word_lstm_size, char_lstm_size)
+        self.char_dec_project = nn.Linear(
             char_lstm_size,
             vocab.get_vocab_size(namespace='token_characters')
         )
@@ -98,6 +98,6 @@ class PastaEncoder(Model):
             'token_characters': Variable(array_dict['text']['token_characters'], requires_grad=False)
         })
         packed = pack_padded_sequence(embedded, lengths, batch_first=True)
-        _, word_lstm_hidden = self.word_lstm(packed)
-        return {'word_lstm_hidden': word_lstm_hidden}
+        word_enc_out, word_enc_hidden = self.word_enc_lstm(packed)
+        return {'word_enc_out': word_enc_out, 'word_enc_hidden': word_enc_hidden}
 
