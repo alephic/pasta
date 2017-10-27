@@ -29,7 +29,7 @@ def load(json_filename):
     dataset = Dataset(list(tqdm((
         Instance({
             'text': TextField(
-                tokens=splitter.split_words(text)[0], 
+                tokens=splitter.split_words(text), 
                 token_indexers=indexers
             )
         }) for text in text_list
@@ -89,15 +89,24 @@ class PastaEncoder(Model):
             char_lstm_size,
             vocab.get_vocab_size(namespace='token_characters')
         )
+        # GPU-only
+        self.cuda()
     def forward(self, data_unsorted: Dataset):
         data_sorted = Dataset(sorted(data_unsorted.instances, key=lambda instance: len(instance.fields['text'].tokens), reverse=True))
         lengths = [len(instance.fields['text'].tokens) for instance in data_sorted.instances]
         array_dict = data_sorted.as_array_dict()
         embedded = self.text_field_embedder({ # TODO fix trying to encode zero-length character sequences
-            'tokens': Variable(torch.LongTensor(array_dict['text']['tokens']), requires_grad=False),
-            'token_characters': Variable(torch.LongTensor(array_dict['text']['token_characters']), requires_grad=False)
+            'tokens': Variable(torch.cuda.LongTensor(array_dict['text']['tokens']), requires_grad=False),
+            'token_characters': Variable(torch.cuda.LongTensor(array_dict['text']['token_characters']), requires_grad=False)
         })
         packed = pack_padded_sequence(embedded, lengths, batch_first=True)
         word_enc_out, word_enc_hidden = self.word_enc_lstm(packed)
         return {'word_enc_out': word_enc_out, 'word_enc_hidden': word_enc_hidden}
 
+def test():
+    d = load('data/emojipasta.json')
+    v = Vocabulary.from_dataset(d)
+    b = Dataset(d.instances[:10])
+    b.index_instances(v)
+    enc = PastaEncoder(v).cuda()
+    return enc(b)
