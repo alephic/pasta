@@ -13,4 +13,4 @@ class DropoutEmbedding(TokenEmbedder):
 
     @overrides
     def forward(self, inputs):
-        return self.dropout.forward(self.base.forward(inputs))
+        return self.dropout(self.base(inputs))
