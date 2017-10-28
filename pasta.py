@@ -9,7 +9,7 @@ from allennlp.modules.token_embedders.embedding import Embedding
 from allennlp.modules.token_embedders import TokenCharactersEncoder
 from allennlp.modules.seq2vec_encoders.pytorch_seq2vec_wrapper import PytorchSeq2VecWrapper
 from allennlp.modules.text_field_embedders.basic_text_field_embedder import BasicTextFieldEmbedder
-from allennlp.nn.util import arrays_to_variables
+from allennlp.nn.util import sort_batch_by_length
 
 from highway_lstm.highway_lstm_layer import HighwayLSTMLayer
 
@@ -43,14 +43,15 @@ class PastaEncoder(Model):
     def __init__(self, vocab, **params):
         super(PastaEncoder, self).__init__(vocab)
         word_emb_size = params.get('word_emb_size', 256)
-        self.word_dropout = params.get('word_dropout', 0.1)
+        self.word_dropout = params.get('word_dropout', 0.05)
         word_lstm_size = params.get('word_lstm_size', 512)
         word_lstm_layers = params.get('word_lstm_layers', 2)
         word_lstm_dropout = params.get('word_lstm_dropout', 0.1)
         char_emb_size = params.get('char_emb_size', 64)
         char_lstm_size = params.get('char_lstm_size', 64)
         char_encoding_dropout = params.get('char_encoding_dropout', 0.1)
-        latent_size = params.get('latent_size', 512)
+        latent_size = params.get('latent_size', 256)
+        dist_mlp_hidden_size = params.get('dist_mlp_hidden_size', latent_size)
         self.text_field_embedder = BasicTextFieldEmbedder({
             'tokens': Embedding(
                 vocab.get_vocab_size(namespace='tokens'),
@@ -79,7 +80,11 @@ class PastaEncoder(Model):
             num_layers=word_lstm_layers,
             recurrent_dropout_prob=word_lstm_dropout
         )
-        self.dist_project = nn.Linear(word_lstm_size, 2*latent_size)
+        self.dist_mlp = nn.Sequential(
+            nn.Linear(word_lstm_size, dist_mlp_hidden_size),
+            nn.ReLU(),
+            nn.Linear(dist_mlp_hidden_size, 2*latent_size)
+        )
         self.word_dec_lstm_cells = nn.ModuleList([
             nn.modules.LSTMCell(latent_size, word_lstm_size) for i in range(word_lstm_layers)
         ])
@@ -101,20 +106,23 @@ class PastaEncoder(Model):
             return (token_indices_array * (1-drop_mask)) + token_mask*drop_mask
         else:
             return token_indices_array
-    def forward(self, data_unsorted: Dataset):
-        data_sorted = Dataset(sorted(data_unsorted.instances, key=lambda instance: len(instance.fields['text'].tokens), reverse=True))
-        lengths = [len(instance.fields['text'].tokens) for instance in data_sorted.instances]
-        batch_size = len(lengths)
-        array_dict = data_sorted.as_array_dict()
-        embedded = self.text_field_embedder({ # TODO fix trying to encode zero-length character sequences
+    def get_latent_dist_params(self, data: Dataset):
+        lengths_list = [len(instance.fields['text'].tokens) for instance in data.instances]
+        lengths_var = Variable(torch.cuda.LongTensor(lengths_list), requires_grad=False)
+        batch_size = len(data.instances)
+        array_dict = data.as_array_dict()
+        embedded = self.text_field_embedder({
             'tokens': Variable(torch.cuda.LongTensor(self.do_word_dropout(array_dict['text']['tokens'])), requires_grad=False),
             'token_characters': Variable(torch.cuda.LongTensor(array_dict['text']['token_characters']), requires_grad=False)
         })
-        packed = pack_padded_sequence(embedded, lengths, batch_first=True)
+        embedded_sorted, lengths_sorted, restoration_indices = sort_batch_by_length(embedded, lengths_var)
+        packed = pack_padded_sequence(embedded_sorted, lengths_sorted.data.tolist(), batch_first=True)
         word_enc_out = self.word_enc_lstm(packed)[0]
-        padded, _ = pad_packed_sequence(word_enc_out, batch_first=True)
-        last_indices = Variable(torch.cuda.LongTensor(np.array(lengths) - 1), requires_grad=False).view(batch_size, 1, 1).expand(-1, -1, padded.size()[2])
-        return {'encoded': torch.gather(padded, 1, last_indices).squeeze(1)}
+        padded = pad_packed_sequence(word_enc_out, batch_first=True)[0]
+        padded = padded.index_select(0, restoration_indices)
+        last_indices = (lengths_var - 1).view(batch_size, 1, 1).expand(-1, -1, padded.size()[2])
+        encodings = padded.gather(1, last_indices).squeeze(1)
+        return self.dist_mlp(encodings)
 
 def test_encode():
     d = load('data/emojipasta.json')
@@ -122,4 +130,4 @@ def test_encode():
     b = Dataset(d.instances[:10])
     b.index_instances(v)
     enc = PastaEncoder(v).cuda()
-    return enc(b)
+    return enc.get_latent_dist_params(b)
