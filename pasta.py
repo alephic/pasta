@@ -1,5 +1,4 @@
 import json
-from tqdm import tqdm
 
 from allennlp.data.fields import TextField
 from allennlp.data import Dataset, Instance, Vocabulary
@@ -18,6 +17,10 @@ import torch.nn as nn
 import torch
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.autograd import Variable
+
+import numpy as np
+
+from tqdm import tqdm
 
 from dropout_embedding import DropoutEmbedding
 
@@ -40,27 +43,26 @@ class PastaEncoder(Model):
     def __init__(self, vocab, **params):
         super(PastaEncoder, self).__init__(vocab)
         word_emb_size = params.get('word_emb_size', 256)
-        word_emb_dropout = params.get('word_emb_dropout', 0.1)
+        self.word_dropout = params.get('word_dropout', 0.1)
         word_lstm_size = params.get('word_lstm_size', 512)
         word_lstm_layers = params.get('word_lstm_layers', 2)
         word_lstm_dropout = params.get('word_lstm_dropout', 0.1)
-        char_emb_size = params.get('char_emb_size', 128)
-        char_emb_dropout = params.get('char_emb_dropout', 0.1)
-        char_lstm_size = params.get('char_lstm_size', 128)
+        char_emb_size = params.get('char_emb_size', 64)
+        char_lstm_size = params.get('char_lstm_size', 64)
         char_encoding_dropout = params.get('char_encoding_dropout', 0.1)
         latent_size = params.get('latent_size', 512)
         self.text_field_embedder = BasicTextFieldEmbedder({
-            'tokens': DropoutEmbedding(Embedding(
+            'tokens': Embedding(
                 vocab.get_vocab_size(namespace='tokens'),
                 word_emb_size,
                 padding_index=0
-            ), dropout_rate=word_emb_dropout),
+            ),
             'token_characters': TokenCharactersEncoder(
-                DropoutEmbedding(Embedding(
+                Embedding(
                     vocab.get_vocab_size(namespace='token_characters'),
                     char_emb_size,
                     padding_index=0
-                ), dropout_rate=char_emb_dropout),
+                ),
                 PytorchSeq2VecWrapper(
                     nn.modules.LSTM(
                         char_emb_size,
@@ -77,6 +79,7 @@ class PastaEncoder(Model):
             num_layers=word_lstm_layers,
             recurrent_dropout_prob=word_lstm_dropout
         )
+        self.dist_project = nn.Linear(word_lstm_size, 2*latent_size)
         self.word_dec_lstm_cells = nn.ModuleList([
             nn.modules.LSTMCell(latent_size, word_lstm_size) for i in range(word_lstm_layers)
         ])
@@ -91,19 +94,29 @@ class PastaEncoder(Model):
         )
         # GPU-only
         self.cuda()
+    def do_word_dropout(self, token_indices_array):
+        if self.training:
+            token_mask = (token_indices_array != 0).astype(int)
+            drop_mask = (np.random.rand(*token_indices_array.shape) < self.word_dropout).astype(int)
+            return (token_indices_array * (1-drop_mask)) + token_mask*drop_mask
+        else:
+            return token_indices_array
     def forward(self, data_unsorted: Dataset):
         data_sorted = Dataset(sorted(data_unsorted.instances, key=lambda instance: len(instance.fields['text'].tokens), reverse=True))
         lengths = [len(instance.fields['text'].tokens) for instance in data_sorted.instances]
+        batch_size = len(lengths)
         array_dict = data_sorted.as_array_dict()
         embedded = self.text_field_embedder({ # TODO fix trying to encode zero-length character sequences
-            'tokens': Variable(torch.cuda.LongTensor(array_dict['text']['tokens']), requires_grad=False),
+            'tokens': Variable(torch.cuda.LongTensor(self.do_word_dropout(array_dict['text']['tokens'])), requires_grad=False),
             'token_characters': Variable(torch.cuda.LongTensor(array_dict['text']['token_characters']), requires_grad=False)
         })
         packed = pack_padded_sequence(embedded, lengths, batch_first=True)
-        word_enc_out, word_enc_hidden = self.word_enc_lstm(packed)
-        return {'word_enc_out': word_enc_out, 'word_enc_hidden': word_enc_hidden}
+        word_enc_out = self.word_enc_lstm(packed)[0]
+        padded, _ = pad_packed_sequence(word_enc_out, batch_first=True)
+        last_indices = Variable(torch.cuda.LongTensor(np.array(lengths) - 1), requires_grad=False).view(batch_size, 1, 1).expand(-1, -1, padded.size()[2])
+        return {'encoded': torch.gather(padded, 1, last_indices).squeeze(1)}
 
-def test():
+def test_encode():
     d = load('data/emojipasta.json')
     v = Vocabulary.from_dataset(d)
     b = Dataset(d.instances[:10])
