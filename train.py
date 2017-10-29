@@ -28,6 +28,8 @@ OPTIM_CLASSES = {
     'adamax': torch.optim.Adamax
 }
 
+MODEL_SAVE_DIR = 'trained_models'
+
 def load_dataset(json_filename):
     with open(json_filename) as f:
         text_list = json.load(f)
@@ -151,12 +153,12 @@ def train_model(config):
 
     if input('Save model? [y/N]: ').lower() == 'y':
         default_name_index = 0
-        while os.path.exists('models/%d.state.th' % default_name_index):
+        while os.path.exists('%s/%d.state.th' % (MODEL_SAVE_DIR, default_name_index)):
             default_name_index += 1
         name = input('Model save name ["%d"]: ' % default_name_index)
         if len(name) == 0:
             name = str(default_name_index)
-        path = 'models/' + name
+        path = '%s/%s' % (MODEL_SAVE_DIR, name)
         save_model(model, path)
         with open(path+ '.eval.json', mode='w') as f:
             json.dump(validate_record, f)
