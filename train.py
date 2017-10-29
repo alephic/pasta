@@ -48,27 +48,30 @@ def partition_dataset(dataset: Dataset, ratio: float):
     return Dataset(dataset.instances[:split_index]), Dataset(dataset.instances[split_index:])
 
 def slice_instance(instance: Instance, max_instance_length: int):
-    start_index = max(0, random.randint(1 - max_instance_length, max(0, len(instance.fields['text'].tokens) - max_instance_length)))
-    return Instance({
-        'text': TextField(
-            instance.fields['text'].tokens[start_index:start_index + max_instance_length],
-            instance.fields['text']._token_indexers
-        )
-    })
+    start_index = max(0, random.randint(1 - max_instance_length, max(0, len(instance.fields['text'].tokens) - max_instance_length + 1)))
+    return Instance({'text': TextField(
+        instance.fields['text'].tokens[start_index:start_index + max_instance_length],
+        instance.fields['text']._token_indexers
+    )})
 
-def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance_length: int):
+def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance_length: int, max_token_length: int):
     instances = random.sample(dataset.instances, batch_size)
     batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
+    max_token_length_in_data = 0
     for instance in batch.instances:
         instance.index_fields(vocab)
-    return batch.as_array_dict(padding_lengths={'text': {'tokens': max_instance_length + 1}})
+        max_token_length_in_data = max(max_token_length_in_data, max(map(lambda tok: len(tok.text), instance.fields['text'].tokens)))
+    return batch.as_array_dict(padding_lengths={'text': {
+        'tokens': max_instance_length,
+        'token_characters': min(max_token_length, max_token_length_in_data)
+    }})
 
-def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
+def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length, max_token_length):
     model.eval()
     remaining = samples
     total_metrics = {metric: 0 for metric in metrics}
     while remaining > 0:
-        batch = get_batch(dataset, model.vocab, min(remaining, batch_size), max_instance_length)
+        batch = get_batch(dataset, model.vocab, min(remaining, batch_size), max_instance_length, max_token_length)
         batch_out = model(batch)
         for metric in metrics:
             batch_metric = batch_out[metric]
@@ -106,6 +109,7 @@ def train_model(config):
     validate_record = []
     batch_size = config.get('batch_size', 20)
     max_instance_length = config.get('max_instance_length', 30)
+    max_token_length = config.get('max_token_length', 20)
     validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', 10*batch_size)
@@ -123,13 +127,13 @@ def train_model(config):
         print('\rStep %d' % step, end='')
         if step % validate_interval == 0:
             print('\nValidation scores at step %d:' % step)
-            scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length)
+            scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length, max_token_length)
             for metric in validate_metrics:
                 print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
             validate_record.append(scores)
 
-        batch = get_batch(train_set, vocab, batch_size, max_instance_length)
+        batch = get_batch(train_set, vocab, batch_size, max_instance_length, max_token_length)
 
         optim.zero_grad()
 

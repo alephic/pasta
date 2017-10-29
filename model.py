@@ -146,18 +146,29 @@ class PastaEncoder(Model):
     
     def embed_inputs(self, array_dict):
         tokens_array = self.do_word_dropout(array_dict['text']['tokens'])
+        print('tokens_array:', tokens_array.shape)
         tokens_array_flat = tokens_array.reshape(tokens_array.size)
+        print('tokens_array_flat': tokens_array_flat.shape)
         chars_array = array_dict['text']['token_characters']
+        print('chars_array:', chars_array.shape)
 
         tokens_array_no_unks = (tokens_array_flat != 1).astype(int) * tokens_array_flat
         embedded_flat = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array_no_unks), requires_grad=False))
+        print('embedded_flat:', embedded_flat.size())
 
         unk_indices = np.ma.array(np.arange(tokens_array.size), mask=tokens_array_flat != 1).compressed()
+        print('unk_indices:', unk_indices.shape)
         chars_flat = chars.reshape(chars.shape[0]*chars.shape[1], chars.shape[2])[unk_indices]
+        print('chars_flat:', chars_flat.shape)
+        max_num_chars = (chars_flat != 0).astype(int).sum(axis=1).max()
+        chars_flat = chars_flat[:, :max_num_chars]
+        print('chars_flat (shortened):', chars_flat.shape)
 
         chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_flat), requires_grad=False))
+        print('chars_embedded:', chars_embedded.size())
         chars_mask = Variable(torch.cuda.FloatTensor((chars_flat != 0).astype(float)), requires_grad=False)
         chars_encoded = self.char_enc(chars_embedded, chars_mask)
+        print('chars_encoded:', chars_encoded.size())
 
         embedded_flat[Variable(torch.cuda.LongTensor(unk_indices), requires_grad=False)] = chars_encoded
         return embedded_flat.view(tokens_array.shape[0], tokens_array.shape[1], embedded_flat.size()[1]).contiguous()
