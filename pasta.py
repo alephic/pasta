@@ -215,20 +215,21 @@ def get_batch(dataset: Dataset, batch_size: int, max_instance_length: int):
     batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
     return batch.as_array_dict(padding_lengths={'tokens': max_instance_length + 1})
 
-def evaluate_metric(model, dataset, metric, samples, batch_size, max_instance_length):
+def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
     model.eval()
     remaining = samples
-    total_metric = 0
+    total_metrics = {metric: 0 for metric in metrics}
     while remaining > 0:
         batch = get_batch(dataset, min(remaining, batch_size), max_instance_length)
         batch_out = model(batch)
-        batch_metric = batch_out[metric]
-        if isinstance(batch_metric, Variable):
-            total_metric += batch_metric.sum()
-        else:
-            total_metric += batch_metric
+        for metric in metrics:
+            batch_metric = batch_out[metric]
+            if isinstance(batch_metric, Variable):
+                total_metrics[metric] += batch_metric.sum().data[0]
+            else:
+                total_metrics[metric] += batch_metric
         remaining -= batch_size
-    return total_metric/samples
+    return {metric: total_score/samples for metric, total_score in total_metrics.items()}
 
 def train_model(train_set: Dataset, validate_set: Dataset, params=None):
     params = params or {}
@@ -242,7 +243,7 @@ def train_model(train_set: Dataset, validate_set: Dataset, params=None):
     step = 0
     batch_size = params.get('batch_size', 60)
     max_instance_length = params.get('max_instance_length', 100)
-    validate_metric = params.get('validate_metric', 'accuracy')
+    validate_metrics = params.get('validate_metrics', ['accuracy', 'loss'])
     validate_interval = params.get('validate_interval', len(train_set.instances))
     validate_samples = params.get('validate_samples', 10*batch_size)
     optim_class = OPTIM_CLASSES[params.get('optim_class', 'adam')]
@@ -256,8 +257,10 @@ def train_model(train_set: Dataset, validate_set: Dataset, params=None):
     signal.signal(signal.SIGINT, handler)
     while True:
         if step % validate_interval == 0:
-            score = evaluate_metric(model, validate_set, validate_metric, validate_samples, batch_size, max_instance_length)
-            print('%s at step %d: %f' % (validate_metric, step, score.data[0] if isinstance(score, Variable) else score))
+            print('Validation scores at step %d:' % step)
+            scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length)
+            for metric in validate_metrics:
+                print('  %s: %f' % (metric, step, scores[metric]))
 
         batch = get_batch(train_set, batch_size, max_instance_length)
 
@@ -280,6 +283,8 @@ def train_model(train_set: Dataset, validate_set: Dataset, params=None):
         save_model(model, path)
         with open(path + '.train.conf.json', mode='w') as f:
             json.dump(params, f)
+
+    return model
 
 def save_model(model: PastaEncoder, path):
     ensure_path(path)
