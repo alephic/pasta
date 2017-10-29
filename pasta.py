@@ -179,6 +179,9 @@ class PastaEncoder(Model):
             output['logits'] = reconstruction_logits
             output['loss'] = torch.sum(loss_vec)
 
+    def decode(self, output_dict):
+        return output_dict
+
 def test_encode():
     d = load('data/emojipasta.json')
     v = Vocabulary.from_dataset(d)

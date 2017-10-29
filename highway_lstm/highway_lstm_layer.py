@@ -112,7 +112,7 @@ class HighwayLSTMLayer(torch.nn.Module):
             self.bias.data[bias_index+self.hidden_size:bias_index+2*self.hidden_size].fill_(1)
             bias_index += 5 * self.hidden_size
 
-    def forward(self, input, dropout_weights=None):
+    def forward(self, input, dropout_weights=None, h0=None, c0=None):
 
         assert isinstance(input, PackedSequence), "HighwayLSTMLayer only accepts PackedSequence input"
         input, lengths = pad_packed_sequence(input, batch_first = self.batch_first)
@@ -125,6 +125,10 @@ class HighwayLSTMLayer(torch.nn.Module):
 
         hy = Variable(input.data.new(self.num_layers, (self.seq_length + 1), self.mini_batch, self.hidden_size).zero_(), requires_grad=False)
         cy = Variable(input.data.new(self.num_layers, (self.seq_length + 1), self.mini_batch, self.hidden_size).zero_(), requires_grad=False)
+        if h0 is not None:
+            hy[:, 0] = h0
+        if c0 is not None:
+            cy[:, 0] = c0
 
         if dropout_weights is None or not self.training:
             dropout_weights = input.data.new().resize_(self.num_layers, self.mini_batch, self.hidden_size)
