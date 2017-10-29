@@ -108,7 +108,7 @@ def train_model(config):
     model = PastaEncoder(vocab, config.get('model_config', {}))
     step = 0
     validate_record = []
-    batch_size = config.get('batch_size', 20)
+    batch_size = config.get('batch_size', 40)
     max_instance_length = config.get('max_instance_length', 30)
     max_token_length = config.get('max_token_length', 20)
     validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
