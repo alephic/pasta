@@ -88,16 +88,16 @@ class PastaEncoder(Model):
             word_emb_size,
             padding_index=0
         )
-        self.char_emb = TimeDistributed(Embedding(
+        self.char_emb = Embedding(
             vocab.get_vocab_size(namespace='token_characters'),
             char_emb_size,
             padding_index=0
-        ))
-        self.char_enc = TimeDistributed(CnnEncoder(
+        )
+        self.char_enc = CnnEncoder(
             char_emb_size,
             char_cnn_filters,
             output_dim=word_emb_size
-        ))
+        )
         self.word_enc = HighwayLSTMLayer(
             word_emb_size,
             self.word_lstm_size,
@@ -146,14 +146,21 @@ class PastaEncoder(Model):
     
     def embed_inputs(self, array_dict):
         tokens_array = self.do_word_dropout(array_dict['text']['tokens'])
+        tokens_array_flat = tokens_array.reshape(tokens_array.size)
         chars_array = array_dict['text']['token_characters']
-        tokens_array_no_unks = (tokens_array != 1).astype(int) * tokens_array
-        embedded = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array_no_unks), requires_grad=False))
-        chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array), requires_grad=False))
-        chars_mask = Variable(torch.cuda.FloatTensor((chars_array != 0).astype(float)), requires_grad=False)
+
+        tokens_array_no_unks = (tokens_array_flat != 1).astype(int) * tokens_array_flat
+        embedded_flat = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array_no_unks), requires_grad=False))
+
+        unk_indices = np.ma.array(np.arange(tokens_array.size), mask=tokens_array_flat != 1).compressed()
+        chars_flat = chars.reshape(chars.shape[0]*chars.shape[1], chars.shape[2])[unk_indices]
+
+        chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_flat), requires_grad=False))
+        chars_mask = Variable(torch.cuda.FloatTensor((chars_flat != 0).astype(float)), requires_grad=False)
         chars_encoded = self.char_enc(chars_embedded, chars_mask)
-        unk_mask = Variable(torch.cuda.FloatTensor((tokens_array == 1).astype(float)), requires_grad=False)
-        return embedded + unk_mask.unsqueeze(2).expand_as(chars_encoded) * chars_encoded
+
+        embedded_flat[Variable(torch.cuda.LongTensor(unk_indices), requires_grad=False)] = chars_encoded
+        return embedded_flat.view(tokens_array.shape[0], tokens_array.shape[1], embedded_flat.size()[1]).contiguous()
 
     def get_latent_dist_params(self, inputs, input_lengths_var: Variable):
         packed_inputs = pack_padded_sequence(inputs, input_lengths_var.data.tolist(), batch_first=True)
