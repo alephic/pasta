@@ -95,7 +95,7 @@ def train_model(config):
     vocab = Vocabulary.from_dataset(
         train_set,
         max_vocab_size={
-            'tokens': config.get('max_token_vocab_size', 1000),
+            'tokens': config.get('max_token_vocab_size', 2000),
             'token_characters': config.get('max_char_vocab_size', 1000)
         }
     )
