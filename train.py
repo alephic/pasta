@@ -162,7 +162,7 @@ def load_model(path):
     return m
 
 if __name__ == '__main__':
-    config = None
+    config = {}
     if len(sys.argv) > 1:
         with open(sys.argv[1]) as f:
             config = json.load(f)
