@@ -148,7 +148,7 @@ class PastaEncoder(Model):
         tokens_array = self.do_word_dropout(array_dict['text']['tokens'])
         print('tokens_array:', tokens_array.shape)
         tokens_array_flat = tokens_array.reshape(tokens_array.size)
-        print('tokens_array_flat:' tokens_array_flat.shape)
+        print('tokens_array_flat:', tokens_array_flat.shape)
         chars_array = array_dict['text']['token_characters']
         print('chars_array:', chars_array.shape)
 
