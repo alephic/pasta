@@ -59,6 +59,7 @@ int highway_lstm_backward_cuda(int inputSize, int hiddenSize, int miniBatch, int
         THCudaTensor *h_gates_grad,
         THCudaTensor *i_gates_grad,
         THCudaTensor *h_out_grad,
+        THCudaTensor *c_out_grad,
         THCudaTensor *x_grad,
         THCudaTensor *T_grad,
         THCudaTensor *bias_grad,
@@ -78,6 +79,7 @@ int highway_lstm_backward_cuda(int inputSize, int hiddenSize, int miniBatch, int
     float * h_gates_grad_ptr = THCudaTensor_data(state, h_gates_grad);
     float * i_gates_grad_ptr = THCudaTensor_data(state, i_gates_grad);
     float * h_out_grad_ptr = THCudaTensor_data(state, h_out_grad);
+    float * c_out_grad_ptr = THCudaTensor_data(state, c_out_grad);
     float * x_grad_ptr = THCudaTensor_data(state, x_grad);
     float * T_grad_ptr = THCudaTensor_data(state, T_grad);
     float * bias_grad_ptr = THCudaTensor_data(state, bias_grad);
@@ -88,7 +90,7 @@ int highway_lstm_backward_cuda(int inputSize, int hiddenSize, int miniBatch, int
     highway_lstm_backward_ongpu(inputSize, hiddenSize, miniBatch, numLayers,
             seqLength, out_grad_ptr, lengths_ptr, h_data_grad_ptr, c_data_grad_ptr,
             x_ptr, h_data_ptr, c_data_ptr, T_ptr, gates_out_ptr, dropout_in_ptr,
-            h_gates_grad_ptr, i_gates_grad_ptr, h_out_grad_ptr,
+            h_gates_grad_ptr, i_gates_grad_ptr, h_out_grad_ptr, c_out_grad_ptr,
             x_grad_ptr, T_grad_ptr, bias_grad_ptr, isTraining, do_weight_grad,
             stream, handle);
 

@@ -10,5 +10,5 @@ int highway_lstm_backward_cuda(int inputSize, int hiddenSize, int miniBatch,
         THCudaTensor *h_data, THCudaTensor *c_data, THCudaTensor *T,
         THCudaTensor *gates_out, THCudaTensor *dropout_in,
         THCudaTensor *h_gates_grad, THCudaTensor *i_gates_grad,
-        THCudaTensor *h_out_grad, THCudaTensor *x_grad,  THCudaTensor *T_grad,
+        THCudaTensor *h_out_grad, THCudaTensor *c_out_grad, THCudaTensor *x_grad,  THCudaTensor *T_grad,
         THCudaTensor *bias_grad, int isTraining, int do_weight_grad);

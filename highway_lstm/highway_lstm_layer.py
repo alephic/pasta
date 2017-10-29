@@ -3,7 +3,7 @@ import numpy
 from torch.autograd import Function, NestedIOFunction, Variable
 from torch.nn import Parameter
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence, pack_padded_sequence
-from ._ext import highway_lstm_layer
+from _ext import highway_lstm_layer
 
 class HighwayLSTMFunction(NestedIOFunction):
     def __init__(self, input_size, hidden_size, num_layers=1,
@@ -30,9 +30,9 @@ class HighwayLSTMFunction(NestedIOFunction):
 
         output = hy[-1,1:]
 
-        return output, hy[:,1:]
+        return output, hy[:,1:], cy[:, 1:]
 
-    def backward(self, grad_output, grad_hy):
+    def backward(self, grad_output, grad_hy, grad_cy):
         input, lengths, weight, bias, hy, cy, dropout, gates = self.saved_tensors
         input = input.contiguous()
         grad_input, grad_weight, grad_bias, grad_hx, grad_cx, grad_dropout, grad_lengths, grad_gates = None, None, None, None, None, None, None, None
@@ -54,7 +54,7 @@ class HighwayLSTMFunction(NestedIOFunction):
                 self.input_size, self.hidden_size, self.mini_batch, self.num_layers,
                 self.seq_length, grad_output, lengths, grad_hx, grad_cx, input, 
                 hy, cy, weight, gates, dropout,
-                tmp_h_gates_grad, tmp_i_gates_grad, grad_hy, grad_input,
+                tmp_h_gates_grad, tmp_i_gates_grad, grad_hy, grad_cy, grad_input,
                 grad_weight, grad_bias, 1 if self.train else 0, 1 if self.needs_input_grad[1] else 0)
 
         return grad_input, grad_weight, grad_bias, grad_hx, grad_cx, grad_dropout, grad_lengths, grad_gates
@@ -138,13 +138,13 @@ class HighwayLSTMLayer(torch.nn.Module):
 
         lengths_var = Variable(torch.IntTensor(lengths))
 
-        output, hidden = HighwayLSTMFunction(self.input_size, self.hidden_size, num_layers=self.num_layers, train=self.training)(input, self.weight, self.bias, hy, cy, dropout_weights, lengths_var, gates)
+        output, hidden, cell = HighwayLSTMFunction(self.input_size, self.hidden_size, num_layers=self.num_layers, train=self.training)(input, self.weight, self.bias, hy, cy, dropout_weights, lengths_var, gates)
 
         output = output.transpose(0,1)
 
         output = pack_padded_sequence(output, lengths, batch_first = self.batch_first)
 
-        return output, hidden
+        return output, hidden, cell
 
 
 if __name__ == '__main__':

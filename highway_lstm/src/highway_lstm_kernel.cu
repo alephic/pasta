@@ -46,6 +46,7 @@ __forceinline__ __device__ float tanh2f(float in) {
 __global__ void elementWise_bp(int hiddenSize, int miniBatch, int numCovered,
                                // Inputs
                                float *out_grad,
+                               float *c_out_grad_ext,
                                float *h_out_grad,
                                float *c_out_grad,
                                float *c_in,
@@ -77,7 +78,7 @@ __global__ void elementWise_bp(int hiddenSize, int miniBatch, int numCovered,
    float lin_gate = gates_out[i_gateIndex + 5 * hiddenSize];
 
    float d_out = d_h * r_gate;
-   float d_c = d_out * out_gate * (1.f - tanh2f(c_out[index])) + c_out_grad[index];
+   float d_c = d_out * out_gate * (1.f - tanh2f(c_out[index])) + c_out_grad[index] + c_out_grad_ext[index];
    float h_prime = out_gate * tanhf(c_out[index]);
 
    float d_in_gate = d_c * act_gate * in_gate * (1.f - in_gate);
@@ -164,7 +165,7 @@ void highway_lstm_backward_ongpu(int inputSize, int hiddenSize, int miniBatch,
         float *h_data_grad, float * c_data_grad, float *x, float *h_data,
         float *c_data, float *T,
         float *gates_out, float *dropout_in, float *h_gates_grad,
-        float *i_gates_grad, float *h_out_grad, float *x_grad, float *T_grad, float *bias_grad,
+        float *i_gates_grad, float *h_out_grad, float *c_out_grad, float *x_grad, float *T_grad, float *bias_grad,
         int isTraining, int do_weight_grad, cudaStream_t stream, cublasHandle_t handle) {
 
 
@@ -235,6 +236,8 @@ void highway_lstm_backward_ongpu(int inputSize, int hiddenSize, int miniBatch,
                 gradPtr = h_out_grad + t * numElements + layer * seqLength * numElements;
             }
 
+            float * cGradPtr = c_out_grad + t * numElements + layer * seqLength * numElements;
+
             cublasErrCheck(cublasSetStream(handle, stream_i));
 
             dim3 blockDim;
@@ -246,6 +249,7 @@ void highway_lstm_backward_ongpu(int inputSize, int hiddenSize, int miniBatch,
             elementWise_bp <<< gridDim, blockDim , 0, stream>>> 
                 (hiddenSize, miniBatch, currNumCovered,
                  gradPtr,
+                 cGradPtr,
                  h_data_grad + prevGradIndex * numElements + layer * (seqLength + 1) * numElements,
                  c_data_grad + prevGradIndex * numElements + layer * (seqLength + 1) * numElements,
                  c_data + prevIndex * numElements + layer * (seqLength + 1) * numElements,
