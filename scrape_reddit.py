@@ -19,4 +19,4 @@ for sub in gen:
 filename = '%s.json' % sys.argv[1]
 with open(filename, mode='w') as f:
   print("Dumping to %s" % filename)
-  json.dump(textposts, f)
+  json.dump(textposts, f, ensure_ascii=False)
