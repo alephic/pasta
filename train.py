@@ -48,7 +48,7 @@ def partition_dataset(dataset: Dataset, ratio: float):
     return Dataset(dataset.instances[:split_index]), Dataset(dataset.instances[split_index:])
 
 def slice_instance(instance: Instance, max_instance_length: int):
-    start_index = random.randint(0, max(0, len(instance.fields['text'].tokens) - max_instance_length))
+    start_index = max(0, random.randint(1 - max_instance_length, max(0, len(instance.fields['text'].tokens) - max_instance_length)))
     return Instance({
         'text': TextField(
             instance.fields['text'].tokens[start_index:start_index + max_instance_length],
