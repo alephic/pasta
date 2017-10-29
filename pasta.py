@@ -9,7 +9,7 @@ from allennlp.modules.token_embedders.embedding import Embedding
 from allennlp.modules.seq2vec_encoders.cnn_encoder import CnnEncoder
 from allennlp.modules.time_distributed import TimeDistributed
 from allennlp.modules.text_field_embedders.basic_text_field_embedder import BasicTextFieldEmbedder
-from allennlp.nn.util import sort_batch_by_length, sequence_cross_entropy_with_logits
+from allennlp.nn.util import sort_batch_by_length
 
 from highway_lstm.highway_lstm_layer import HighwayLSTMLayer
 
@@ -22,8 +22,7 @@ import numpy as np
 
 from tqdm import tqdm
 
-from dropout_embedding import DropoutEmbedding
-
+from util import sequence_cross_entropy_with_logits
 
 def get_kl_divergence_from_normal(mu, sigma):
     sigma_squared = sigma ** 2
@@ -128,14 +127,13 @@ class PastaEncoder(Model):
         tokens_array_no_unks = (tokens_array != 1).astype(int) * tokens_array
         embedded = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array_no_unks), requires_grad=False))
         chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array), requires_grad=False))
-        chars_encoded = self.char_enc(chars_embedded)
-        print(embedded.size())
-        print(chars_encoded.size())
+        chars_mask = Variable(torch.cuda.FloatTensor((chars_array != 0).astype(float)), requires_grad=False)
+        chars_encoded = self.char_enc(chars_embedded, chars_mask)
         unk_mask = Variable(torch.cuda.FloatTensor((tokens_array == 1).astype(float)), requires_grad=False)
         return embedded + unk_mask.unsqueeze(2).expand_as(chars_encoded) * chars_encoded
 
     def get_latent_dist_params(self, inputs, input_lengths_var: Variable):
-        packed_inputs = pack_padded_sequence(inputs, input_lengths.data.tolist(), batch_first=True)
+        packed_inputs = pack_padded_sequence(inputs, input_lengths_var.data.tolist(), batch_first=True)
         word_enc_out = self.word_enc(packed_inputs)[0]
         padded = pad_packed_sequence(word_enc_out, batch_first=True)[0]
         last_indices = (input_lengths_var - 1).view(padded.size()[0], 1, 1).expand(-1, -1, padded.size()[2])
@@ -153,7 +151,7 @@ class PastaEncoder(Model):
         packed_inputs = pack_padded_sequence(inputs_and_latent, input_lengths_var.data.tolist(), batch_first=True)
         word_dec_out = self.word_dec(packed_inputs)[0]
         packed_logits = PackedSequence(self.word_dec_project(word_dec_out.data), word_dec_out.batch_sizes)
-        return pad_packed_sequence(packed_logits, batch_first=True)[0]
+        return pad_packed_sequence(packed_logits, batch_first=True)[0].contiguous()
 
     def forward(self, data: Dataset, kl_weight=1.0, reconstruct=True):
         output_dict = {}
@@ -204,9 +202,14 @@ class PastaEncoder(Model):
         return output_dict
 
 def test_forward():
+    print("Loading dataset")
     d = load('data/emojipasta.json')
-    v = Vocabulary.from_dataset(d)
+    print("Generating vocabulary")
+    v = Vocabulary.from_dataset(d, min_count=2, max_vocab_size=4000)
+    print("Creating test batch")
     b = Dataset(d.instances[:10])
     b.index_instances(v)
+    print("Initializing model")
     enc = PastaEncoder(v).cuda()
+    print("Running model.forward")
     return enc.forward(b)
