@@ -59,14 +59,13 @@ def slice_instance(instance: Instance, max_instance_length: int):
 def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance_length: int, max_token_length: int):
     instances = random.sample(dataset.instances, batch_size)
     batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
-    max_token_length_in_data = 0
     for instance in batch.instances:
         instance.index_fields(vocab)
-        max_token_length_in_data = max(max_token_length_in_data, max(map(lambda tok: len(tok.text), instance.fields['text'].tokens)))
-    return batch.as_array_dict(padding_lengths={'text': {
-        'tokens': max_instance_length,
-        'token_characters': 20
+    array_dict = batch.as_array_dict(padding_lengths={'text': {
+        'tokens': max_instance_length
     }})
+    array_dict['text']['token_characters'] = array_dict['text']['token_characters'][:, :, :max_token_length]
+    return array_dict
 
 def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length, max_token_length):
     model.eval()
