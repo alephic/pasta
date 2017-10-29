@@ -52,7 +52,7 @@ def slice_instance(instance: Instance, max_instance_length: int):
     return Instance({
         'text': TextField(
             instance.fields['text'].tokens[start_index:start_index + max_instance_length],
-            instance.fields['text'].token_indexers
+            instance.fields['text']._token_indexers
         )
     })
 
