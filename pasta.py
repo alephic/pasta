@@ -1,4 +1,6 @@
 import json
+import random
+import signal
 
 from allennlp.data.fields import TextField
 from allennlp.data import Dataset, Instance, Vocabulary
@@ -22,7 +24,7 @@ import numpy as np
 
 from tqdm import tqdm
 
-from util import sequence_cross_entropy_with_logits
+from util import sequence_cross_entropy_with_logits, ensure_path
 
 def get_kl_divergence_from_normal(mu, sigma):
     sigma_squared = sigma ** 2
@@ -43,9 +45,14 @@ def load(json_filename):
     ), total=len(text_list))))
     return dataset
 
+def partition_dataset(dataset: Dataset, ratio: float):
+    split_index = int(len(dataset.instances)*ratio)
+    return Dataset(dataset.instances[:split_index]), Dataset(dataset.instances[split_index:])
+
 class PastaEncoder(Model):
-    def __init__(self, vocab, **params):
+    def __init__(self, vocab, params):
         super(PastaEncoder, self).__init__(vocab)
+        self.params = params
         word_emb_size = params.get('word_emb_size', 256)
         self.word_dropout = params.get('word_dropout', 0.05)
         self.word_lstm_size = params.get('word_lstm_size', 512)
@@ -198,4 +205,94 @@ class PastaEncoder(Model):
                     open_seqs.remove(i)
         output_dict['decoded'] = torch.stack(decoded_slices, 1)
         return output_dict
+
+def slice_instance(instance: Instance, max_instance_length: int):
+    start_index = random.randint(0, max(0, len(instance['text'].tokens) - max_instance_length))
+    return Instance({'text': TextField(instance['text'].tokens[start_index:start_index + max_instance_length], instance['text'].token_indexers)})
+
+def get_batch(dataset: Dataset, batch_size: int, max_instance_length: int):
+    instances = random.sample(dataset.instances, batch_size)
+    batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
+    return batch.as_array_dict(padding_lengths={'tokens': max_instance_length + 1})
+
+def evaluate_metric(model, dataset, metric, samples, batch_size, max_instance_length):
+    model.eval()
+    remaining = samples
+    total_metric = 0
+    while remaining > 0:
+        batch = get_batch(dataset, min(remaining, batch_size), max_instance_length)
+        batch_out = model(batch)
+        batch_metric = batch_out[metric]
+        if isinstance(batch_metric, Variable):
+            total_metric += batch_metric.sum()
+        else:
+            total_metric += batch_metric
+        remaining -= batch_size
+    return total_metric/samples
+
+def train_model(train_set: Dataset, validate_set: Dataset, params=None):
+    params = params or {}
+    print('Generating vocabulary')
+    v = Vocabulary.from_dataset(train_set, max_vocab_size=params.get('max_vocab_size', 4000))
+    print('Creating model')
+    model = PastaEncoder(v, params.get('model_params', {}))
+    print('Indexing datasets')
+    train_set.index_instances(v)
+    validate_set.index_instances(v)
+    step = 0
+    batch_size = params.get('batch_size', 60)
+    max_instance_length = params.get('max_instance_length', 100)
+    validate_metric = params.get('validate_metric', 'accuracy')
+    validate_interval = params.get('validate_interval', len(train_set.instances))
+    validate_samples = params.get('validate_samples', 10*batch_size)
+    optim_class = OPTIM_CLASSES[params.get('optim_class', 'adam')]
+    optim_params = params.get('optim_params', {})
+    optim = optim_class(model.parameters(), **optim_params)
+    should_stop = False
+    def handler(signal, frame):
+        print("Stopping training")
+        nonlocal should_stop
+        should_stop = True
+    signal.signal(signal.SIGINT, handler)
+    while True:
+        if step % validate_interval == 0:
+            score = evaluate_metric(model, validate_set, validate_metric, validate_samples, batch_size, max_instance_length)
+            print('%s at step %d: %f' % (validate_metric, step, score.data[0] if isinstance(score, Variable) else score))
+
+        batch = get_batch(train_set, batch_size, max_instance_length)
+
+        optim.zero_grad()
+
+        if not model.training:
+            model.train()
+        batch_out = model(batch)
+        loss = batch_out['loss']
+        loss.backward()
+
+        optim.step()
+
+        step += 1
+
+    if input('Save model? [y/N]: ').lower() == 'y':
+        path = input('Model save path [models/0]: ')
+        if len(path) == 0:
+            path = 'models/0'
+        save_model(model, path)
+        with open(path + '.train.conf.json', mode='w') as f:
+            json.dump(params, f)
+
+def save_model(model: PastaEncoder, path):
+    ensure_path(path)
+    with open(path + '.conf.json', mode='w') as f:
+        json.dump(model.params, f)
+    torch.save(model.state_dict(), path + '.state.th')
+    model.vocab.save_to_files(path + '.vocab')
+
+def load_model(path):
+    v = Vocabulary.from_files(path + '.vocab')
+    with open(path + '.conf.json') as f:
+        params = json.load(f)
+    m = PastaEncoder(v, params)
+    m.load_state_dict(torch.load(path + '.state.th'))
+    return m
 

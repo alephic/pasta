@@ -1,4 +1,5 @@
 import torch
+import os
 
 def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
                                        targets: torch.LongTensor,
@@ -52,3 +53,16 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
         num_non_empty_sequences = ((weights.sum(1) > 0).float().sum() + 1e-13)
         return per_batch_loss.sum() / num_non_empty_sequences
     return per_batch_loss
+
+def ensure_path(path):
+    directory = os.path.dirname(path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+OPTIM_CLASSES = {
+    'sgd': torch.optim.SGD,
+    'adam': torch.optim.Adam,
+    'adagrad': torch.optim.Adagrad,
+    'adadelta': torch.optim.Adadelta,
+    'adamax': torch.optim.Adamax
+}
