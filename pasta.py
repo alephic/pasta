@@ -6,8 +6,8 @@ from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenCharactersIn
 from allennlp.data.tokenizers import WordTokenizer
 from allennlp.models.model import Model
 from allennlp.modules.token_embedders.embedding import Embedding
-from allennlp.modules.token_embedders import TokenCharactersEncoder
-from allennlp.modules.seq2vec_encoders.pytorch_seq2vec_wrapper import PytorchSeq2VecWrapper
+from allennlp.modules.seq2vec_encoders.cnn_encoder import CnnEncoder
+from allennlp.modules.time_distributed import TimeDistributed
 from allennlp.modules.text_field_embedders.basic_text_field_embedder import BasicTextFieldEmbedder
 from allennlp.nn.util import sort_batch_by_length, sequence_cross_entropy_with_logits
 
@@ -54,59 +54,50 @@ class PastaEncoder(Model):
         super(PastaEncoder, self).__init__(vocab)
         word_emb_size = params.get('word_emb_size', 256)
         self.word_dropout = params.get('word_dropout', 0.05)
-        word_lstm_size = params.get('word_lstm_size', 512)
+        self.word_lstm_size = params.get('word_lstm_size', 512)
         word_lstm_layers = params.get('word_lstm_layers', 2)
         word_lstm_dropout = params.get('word_lstm_dropout', 0.1)
         char_emb_size = params.get('char_emb_size', 64)
-        char_lstm_size = params.get('char_lstm_size', 64)
-        char_encoding_dropout = params.get('char_encoding_dropout', 0.1)
+        char_cnn_filters = params.get('char_lstm_size', 64)
         latent_size = params.get('latent_size', 256)
         dist_mlp_hidden_size = params.get('dist_mlp_hidden_size', latent_size)
-        self.text_field_embedder = BasicTextFieldEmbedder({
-            'tokens': Embedding(
-                vocab.get_vocab_size(namespace='tokens'),
-                word_emb_size,
-                padding_index=0
-            ),
-            'token_characters': TokenCharactersEncoder(
-                Embedding(
-                    vocab.get_vocab_size(namespace='token_characters'),
-                    char_emb_size,
-                    padding_index=0
-                ),
-                PytorchSeq2VecWrapper(
-                    nn.modules.LSTM(
-                        char_emb_size,
-                        char_lstm_size,
-                        batch_first=True
-                    )
-                ),
-                dropout=char_encoding_dropout
-            )
-        })
-        self.word_enc_lstm = HighwayLSTMLayer(
-            self.text_field_embedder.get_output_dim(),
-            word_lstm_size,
+        self.word_emb = Embedding(
+            vocab.get_vocab_size(namespace='tokens'),
+            word_emb_size,
+            padding_index=0
+        )
+        self.char_emb = TimeDistributed(Embedding(
+            vocab.get_vocab_size(namespace='token_characters'),
+            char_emb_size,
+            padding_index=0
+        ))
+        self.char_enc = TimeDistributed(CnnEncoder(
+            char_emb_size,
+            char_cnn_filters,
+            output_dim=word_emb_size
+        ))
+        self.word_enc = HighwayLSTMLayer(
+            word_emb_size,
+            self.word_lstm_size,
             num_layers=word_lstm_layers,
             recurrent_dropout_prob=word_lstm_dropout
         )
         self.dist_mlp = nn.Sequential(
-            nn.Linear(word_lstm_size, dist_mlp_hidden_size),
+            nn.Linear(self.word_lstm_size, dist_mlp_hidden_size),
             nn.ReLU(),
             nn.Linear(dist_mlp_hidden_size, 2*latent_size)
         )
-        self.word_dec_lstm = HighwayLSTMLayer(
-            self.text_field_embedder.get_output_dim()+latent_size,
-            word_lstm_size,
+        self.word_dec = HighwayLSTMLayer(
+            word_emb_size + latent_size,
+            self.word_lstm_size,
             num_layers=word_lstm_layers,
             recurrent_dropout_prob=word_lstm_dropout
         )
-        self.word_dec_project_out_size = vocab.get_vocab_size(namespace='tokens') + 1 # extra slot for EOS
         self.word_dec_project = nn.Linear(
-            word_lstm_size,
-            self.word_dec_project_out_size
+            self.word_lstm_size,
+            vocab.get_vocab_size(namespace='tokens') + 1 # extra slot for EOS
         )
-        #self.char_dec_lstm_cell = nn.modules.LSTMCell(word_lstm_size, char_lstm_size)
+        #self.char_dec_lstm_cell = nn.modules.LSTMCell(self.word_lstm_size, char_lstm_size)
         #self.char_dec_project = nn.Linear(
         #    char_lstm_size,
         #    vocab.get_vocab_size(namespace='token_characters') + 1 # extra slot for EOS
@@ -132,14 +123,20 @@ class PastaEncoder(Model):
         return Variable(torch.cuda.LongTensor(array), requires_grad=False)
     
     def embed_inputs(self, array_dict):
-        return self.text_field_embedder({
-            'tokens': Variable(torch.cuda.LongTensor(self.do_word_dropout(array_dict['text']['tokens'])), requires_grad=False),
-            'token_characters': Variable(torch.cuda.LongTensor(array_dict['text']['token_characters']), requires_grad=False)
-        })
+        tokens_array = self.do_word_dropout(array_dict['text']['tokens'])
+        chars_array = array_dict['text']['token_characters']
+        tokens_array_no_unks = (tokens_array != 1).astype(int) * tokens_array
+        embedded = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array_no_unks), requires_grad=False))
+        chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array), requires_grad=False))
+        chars_encoded = self.char_enc(chars_embedded)
+        print(embedded.size())
+        print(chars_encoded.size())
+        unk_mask = Variable(torch.cuda.FloatTensor((tokens_array == 1).astype(float)), requires_grad=False)
+        return embedded + unk_mask.unsqueeze(2).expand_as(chars_encoded) * chars_encoded
 
     def get_latent_dist_params(self, inputs, input_lengths_var: Variable):
         packed_inputs = pack_padded_sequence(inputs, input_lengths.data.tolist(), batch_first=True)
-        word_enc_out = self.word_enc_lstm(packed_inputs)[0]
+        word_enc_out = self.word_enc(packed_inputs)[0]
         padded = pad_packed_sequence(word_enc_out, batch_first=True)[0]
         last_indices = (input_lengths_var - 1).view(padded.size()[0], 1, 1).expand(-1, -1, padded.size()[2])
         encodings = padded.gather(1, last_indices).squeeze(1)
@@ -154,7 +151,7 @@ class PastaEncoder(Model):
             2
         )
         packed_inputs = pack_padded_sequence(inputs_and_latent, input_lengths_var.data.tolist(), batch_first=True)
-        word_dec_out = self.word_dec_lstm(packed_inputs)[0]
+        word_dec_out = self.word_dec(packed_inputs)[0]
         packed_logits = PackedSequence(self.word_dec_project(word_dec_out.data), word_dec_out.batch_sizes)
         return pad_packed_sequence(packed_logits, batch_first=True)[0]
 
@@ -162,7 +159,7 @@ class PastaEncoder(Model):
         output = {}
         array_dict = data.as_array_dict()
         embedded = self.embed_inputs(array_dict)
-        lengths = [len(instance.fields['text'].tokens) for instance in data]
+        lengths = [len(instance.fields['text'].tokens) for instance in data.instances]
         lengths_var = Variable(torch.cuda.LongTensor(lengths), requires_grad=False)
         sorted_embedded, sorted_lengths_var, unsort_indices = sort_batch_by_length(embedded, lengths_var)
         mu, sigma = self.get_latent_dist_params(sorted_embedded, sorted_lengths_var)
@@ -179,7 +176,30 @@ class PastaEncoder(Model):
             output['logits'] = reconstruction_logits
             output['loss'] = torch.sum(loss_vec)
 
-    def decode(self, output_dict):
+    def decode(self, output_dict, max_length=4000):
+        sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev'])
+        batch_size = sampled_latent.size()[0]
+        eos = self.vocab.get_vocab_size(namespace='tokens')
+        h_prev = None
+        c_prev = None
+        input_indices = Variable(torch.LongTensor([self.vocab.get_token_index('@@SOS@@')]*batch_size), requires_grad=False)
+        lengths = [1]*batch_size
+        open_seqs = set(range(batch_size))
+        decoded_slices = []
+        while len(open_seqs) > 0 and len(decoded_slices) < max_length:
+            inputs = self.word_emb(input_indices).unsqueeze(1)
+            _, h, c = self.word_dec(pack_padded_sequence(inputs, lengths, batch_first=True), h0=h_prev, c0=c_prev)
+            h_prev = h[:, 0] # all layers, t=0
+            c_prev = c[:, 0]
+            out = h[-1, 0] # out.size(): (batch_size, word_lstm_size)
+            logits = self.word_dec_project(out)
+            _, argmax = torch.max(logits, 1)
+            input_indices = argmax
+            decoded_slices.append(argmax)
+            for i in list(open_seqs):
+                if argmax.data[i] == eos:
+                    open_seqs.remove(i)
+        output_dict['decoded'] = torch.stack(decoded_slices, 1)
         return output_dict
 
 def test_encode():
