@@ -3,5 +3,5 @@ data/*.json
 *.pyc
 highway_lstm/_ext
 highway_lstm/src/*.o
-models/
+trained_models/
 .vscode/
