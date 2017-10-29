@@ -158,7 +158,7 @@ class PastaEncoder(Model):
 
         unk_indices = np.ma.array(np.arange(tokens_array.size), mask=tokens_array_flat != 1).compressed()
         print('unk_indices:', unk_indices.shape)
-        chars_flat = chars.reshape(chars.shape[0]*chars.shape[1], chars.shape[2])[unk_indices]
+        chars_flat = chars_array.reshape(chars_array.shape[0]*chars_array.shape[1], chars_array.shape[2])[unk_indices]
         print('chars_flat:', chars_flat.shape)
         max_num_chars = (chars_flat != 0).astype(int).sum(axis=1).max()
         chars_flat = chars_flat[:, :max_num_chars]
