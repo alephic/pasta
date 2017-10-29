@@ -56,9 +56,11 @@ def slice_instance(instance: Instance, max_instance_length: int):
         )
     })
 
-def get_batch(dataset: Dataset, batch_size: int, max_instance_length: int):
+def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance_length: int):
     instances = random.sample(dataset.instances, batch_size)
     batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
+    for instance in batch.instances:
+        instance.index_fields(vocab)
     return batch.as_array_dict(padding_lengths={'tokens': max_instance_length + 1})
 
 def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
@@ -66,7 +68,7 @@ def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_
     remaining = samples
     total_metrics = {metric: 0 for metric in metrics}
     while remaining > 0:
-        batch = get_batch(dataset, min(remaining, batch_size), max_instance_length)
+        batch = get_batch(dataset, model.vocab, min(remaining, batch_size), max_instance_length)
         batch_out = model(batch)
         for metric in metrics:
             batch_metric = batch_out[metric]
@@ -90,12 +92,9 @@ def train_model(config):
         print('Loading validation dataset:', validate_set)
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
-    v = Vocabulary.from_dataset(train_set, max_vocab_size=config.get('max_vocab_size', 4000))
+    vocab = Vocabulary.from_dataset(train_set, max_vocab_size=config.get('max_vocab_size', 4000))
     print('Initializing model')
-    model = PastaEncoder(v, config.get('model_config', {}))
-    print('Indexing datasets')
-    train_set.index_instances(v)
-    validate_set.index_instances(v)
+    model = PastaEncoder(vocab, config.get('model_config', {}))
     step = 0
     validate_record = []
     batch_size = config.get('batch_size', 60)
@@ -123,7 +122,7 @@ def train_model(config):
             scores['step'] = step
             validate_record.append(scores)
 
-        batch = get_batch(train_set, batch_size, max_instance_length)
+        batch = get_batch(train_set, vocab, batch_size, max_instance_length)
 
         optim.zero_grad()
 
