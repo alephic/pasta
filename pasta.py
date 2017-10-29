@@ -156,15 +156,15 @@ class PastaEncoder(Model):
         return pad_packed_sequence(packed_logits, batch_first=True)[0]
 
     def forward(self, data: Dataset, kl_weight=1.0, reconstruct=True):
-        output = {}
+        output_dict = {}
         array_dict = data.as_array_dict()
         embedded = self.embed_inputs(array_dict)
         lengths = [len(instance.fields['text'].tokens) for instance in data.instances]
         lengths_var = Variable(torch.cuda.LongTensor(lengths), requires_grad=False)
         sorted_embedded, sorted_lengths_var, unsort_indices = sort_batch_by_length(embedded, lengths_var)
         mu, sigma = self.get_latent_dist_params(sorted_embedded, sorted_lengths_var)
-        output['latent_mean'] = mu
-        output['latent_stdev'] = sigma
+        output_dict['latent_mean'] = mu
+        output_dict['latent_stdev'] = sigma
         if reconstruct:
             sampled_latent = torch.normal(mu, sigma)
             reconstruction_logits = self.get_reconstruction_logits(sampled_latent, sorted_embedded, sorted_lengths_var)
@@ -173,8 +173,9 @@ class PastaEncoder(Model):
             xent = sequence_cross_entropy_with_logits(reconstruction_logits, target_indices, xent_mask, batch_average=False)
             dkl = get_kl_divergence_from_normal(mu, sigma)
             loss_vec = kl_weight * dkl + xent
-            output['logits'] = reconstruction_logits
-            output['loss'] = torch.sum(loss_vec)
+            output_dict['logits'] = reconstruction_logits
+            output_dict['loss'] = torch.sum(loss_vec)
+        return output_dict
 
     def decode(self, output_dict, max_length=4000):
         sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev'])
@@ -202,10 +203,10 @@ class PastaEncoder(Model):
         output_dict['decoded'] = torch.stack(decoded_slices, 1)
         return output_dict
 
-def test_encode():
+def test_forward():
     d = load('data/emojipasta.json')
     v = Vocabulary.from_dataset(d)
     b = Dataset(d.instances[:10])
     b.index_instances(v)
     enc = PastaEncoder(v).cuda()
-    return enc.get_latent_dist_params(b)
+    return enc.forward(b)
