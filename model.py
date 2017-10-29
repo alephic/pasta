@@ -71,18 +71,18 @@ def get_kl_divergence_from_normal(mu, sigma):
     return -0.5 * torch.sum(1 + torch.log(sigma_squared) - mu**2 - sigma_squared)
 
 class PastaEncoder(Model):
-    def __init__(self, vocab, params):
+    def __init__(self, vocab, config):
         super(PastaEncoder, self).__init__(vocab)
-        self.params = params
-        word_emb_size = params.get('word_emb_size', 256)
-        self.word_dropout = params.get('word_dropout', 0.05)
-        self.word_lstm_size = params.get('word_lstm_size', 512)
-        word_lstm_layers = params.get('word_lstm_layers', 2)
-        word_lstm_dropout = params.get('word_lstm_dropout', 0.1)
-        char_emb_size = params.get('char_emb_size', 64)
-        char_cnn_filters = params.get('char_lstm_size', 64)
-        latent_size = params.get('latent_size', 256)
-        dist_mlp_hidden_size = params.get('dist_mlp_hidden_size', latent_size)
+        self.config = config
+        word_emb_size = config.get('word_emb_size', 256)
+        self.word_dropout = config.get('word_dropout', 0.05)
+        self.word_lstm_size = config.get('word_lstm_size', 512)
+        word_lstm_layers = config.get('word_lstm_layers', 2)
+        word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
+        char_emb_size = config.get('char_emb_size', 64)
+        char_cnn_filters = config.get('char_lstm_size', 64)
+        latent_size = config.get('latent_size', 256)
+        dist_mlp_hidden_size = config.get('dist_mlp_hidden_size', latent_size)
         self.word_emb = Embedding(
             vocab.get_vocab_size(namespace='tokens'),
             word_emb_size,

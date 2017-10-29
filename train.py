@@ -72,34 +72,34 @@ def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_
         remaining -= batch_size
     return {metric: total_score/samples for metric, total_score in total_metrics.items()}
 
-def train_model(**params):
-    train_set_path = params.get('train_set_path', 'data/emojipasta_utf8.json')
+def train_model(config):
+    train_set_path = config.get('train_set_path', 'data/emojipasta_utf8.json')
     print('Loading training dataset:', train_set_path)
     train_set = load_dataset(train_set_path)
-    validate_set_path = params.get('validate_set_path', None)
+    validate_set_path = config.get('validate_set_path', None)
     if validate_set_path is None:
-        train_set, validate_set = partition_dataset(train_set, params.get('train_partition', 0.9))
+        train_set, validate_set = partition_dataset(train_set, config.get('train_partition', 0.9))
         print('Created train partition with %d examples' % len(train_set.instances))
         print('Created validation partition with %d examples' % len(validate_set.instances))
     else:
         print('Loading validation dataset:', validate_set)
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
-    v = Vocabulary.from_dataset(train_set, max_vocab_size=params.get('max_vocab_size', 4000))
+    v = Vocabulary.from_dataset(train_set, max_vocab_size=config.get('max_vocab_size', 4000))
     print('Initializing model')
-    model = PastaEncoder(v, params.get('model_params', {}))
+    model = PastaEncoder(v, config.get('model_config', {}))
     print('Indexing datasets')
     train_set.index_instances(v)
     validate_set.index_instances(v)
     step = 0
     validate_record = []
-    batch_size = params.get('batch_size', 60)
-    max_instance_length = params.get('max_instance_length', 100)
-    validate_metrics = params.get('validate_metrics', ['accuracy', 'loss'])
-    validate_interval = params.get('validate_interval', len(train_set.instances))
-    validate_samples = params.get('validate_samples', 10*batch_size)
-    optim_class = OPTIM_CLASSES[params.get('optim_class', 'adam')]
-    optim_args = params.get('optim_args', {})
+    batch_size = config.get('batch_size', 60)
+    max_instance_length = config.get('max_instance_length', 100)
+    validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
+    validate_interval = config.get('validate_interval', len(train_set.instances))
+    validate_samples = config.get('validate_samples', 10*batch_size)
+    optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
+    optim_args = config.get('optim_args', {})
     optim = optim_class(model.parameters(), **optim_args)
     should_stop = False
     def handler(signal, frame):
@@ -149,18 +149,21 @@ def train_model(**params):
 def save_model(model: PastaEncoder, path):
     ensure_path(path)
     with open(path + '.model.conf.json', mode='w') as f:
-        json.dump(model.params, f)
+        json.dump(model.config, f)
     torch.save(model.state_dict(), path + '.state.th')
     model.vocab.save_to_files(path + '.vocab')
 
 def load_model(path):
     v = Vocabulary.from_files(path + '.vocab')
     with open(path + '.model.conf.json') as f:
-        params = json.load(f)
-    m = PastaEncoder(v, params)
+        config = json.load(f)
+    m = PastaEncoder(v, config)
     m.load_state_dict(torch.load(path + '.state.th'))
     return m
 
 if __name__ == '__main__':
+    config = None
     if len(sys.argv) > 1:
-        config_path = 
+        with open(sys.argv[1]) as f:
+            config = json.load(f)
+    train_model(config)
