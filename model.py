@@ -201,23 +201,28 @@ class PastaEncoder(Model):
             output_dict['loss'] = torch.sum(loss_vec)
         return output_dict
 
-    def decode(self, output_dict, max_length=4000):
-        sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev'])
+    def decode(self, output_dict, min_length=100, max_length=500):
+        sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev']).unsqueeze(1)
         batch_size = sampled_latent.size()[0]
         eos = self.vocab.get_vocab_size(namespace='tokens')
         h_prev = None
         c_prev = None
-        input_indices = Variable(torch.LongTensor([self.vocab.get_token_index('@@SOS@@')]*batch_size), requires_grad=False)
+        input_indices = Variable(torch.cuda.LongTensor([self.vocab.get_token_index('@@SOS@@')]*batch_size), requires_grad=False)
         lengths = [1]*batch_size
         open_seqs = set(range(batch_size))
         decoded_slices = []
         while len(open_seqs) > 0 and len(decoded_slices) < max_length:
-            inputs = self.word_emb(input_indices).unsqueeze(1)
+            inputs = torch.cat(
+                (self.word_emb(input_indices).unsqueeze(1), sampled_latent),
+                2
+            )
             _, h, c = self.word_dec(pack_padded_sequence(inputs, lengths, batch_first=True), h0=h_prev, c0=c_prev)
             h_prev = h[:, 0] # all layers, t=0
             c_prev = c[:, 0]
             out = h[-1, 0] # out.size(): (batch_size, word_lstm_size)
             logits = self.word_dec_project(out)
+            if len(decoded_slices) < min_length:
+                logits[:, eos] = torch.min(logits, 1)[0]
             _, argmax = torch.max(logits, 1)
             input_indices = argmax
             decoded_slices.append(argmax)
@@ -226,3 +231,18 @@ class PastaEncoder(Model):
                     open_seqs.remove(i)
         output_dict['decoded'] = torch.stack(decoded_slices, 1)
         return output_dict
+
+    def make_readable(self, decoded):
+        out = []
+        for i in range(decoded.size()[0]):
+            out_line = []
+            for t in range(decoded.size()[1]):
+                curr = decoded.data[i, t]
+                if curr == 0:
+                    break
+                elif curr == 1:
+                    out_line.append('_')
+                elif curr < self.vocab.get_vocab_size():
+                    out_line.append(self.vocab.get_token_from_index(curr))
+            out.append(' '.join(out_line))
+        return out

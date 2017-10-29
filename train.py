@@ -92,7 +92,14 @@ def train_model(config):
         print('Loading validation dataset:', validate_set)
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
-    vocab = Vocabulary.from_dataset(train_set, max_vocab_size=config.get('max_vocab_size', 1000))
+    vocab = Vocabulary.from_dataset(
+        train_set,
+        max_vocab_size={
+            'tokens': config.get('max_token_vocab_size', 1000),
+            'token_characters': config.get('max_char_vocab_size', 1000)
+        }
+    )
+    print('Vocabulary has %d token entries and %d character entries' % (vocab.get_vocab_size(namespace='tokens'), vocab.get_vocab_size(namespace='token_characters')))
     print('Initializing model')
     model = PastaEncoder(vocab, config.get('model_config', {}))
     step = 0
