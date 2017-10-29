@@ -65,7 +65,7 @@ def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance
         max_token_length_in_data = max(max_token_length_in_data, max(map(lambda tok: len(tok.text), instance.fields['text'].tokens)))
     return batch.as_array_dict(padding_lengths={'text': {
         'tokens': max_instance_length,
-        'token_characters': min(max_token_length, max_token_length_in_data)
+        'token_characters': 20
     }})
 
 def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length, max_token_length):
