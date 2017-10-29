@@ -61,7 +61,7 @@ def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance
     batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
     for instance in batch.instances:
         instance.index_fields(vocab)
-    return batch.as_array_dict(padding_lengths={'tokens': max_instance_length + 1})
+    return batch.as_array_dict(padding_lengths={'text': {'tokens': max_instance_length + 1}})
 
 def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
     model.eval()
@@ -72,7 +72,7 @@ def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_
         batch_out = model(batch)
         for metric in metrics:
             batch_metric = batch_out[metric]
-            if isinstance(batch_metric, Variable):
+            if isinstance(batch_metric, torch.autograd.Variable):
                 total_metrics[metric] += batch_metric.sum().data[0]
             else:
                 total_metrics[metric] += batch_metric
@@ -92,15 +92,15 @@ def train_model(config):
         print('Loading validation dataset:', validate_set)
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
-    vocab = Vocabulary.from_dataset(train_set, max_vocab_size=config.get('max_vocab_size', 4000))
+    vocab = Vocabulary.from_dataset(train_set, max_vocab_size=config.get('max_vocab_size', 1000))
     print('Initializing model')
     model = PastaEncoder(vocab, config.get('model_config', {}))
     step = 0
     validate_record = []
-    batch_size = config.get('batch_size', 60)
-    max_instance_length = config.get('max_instance_length', 100)
+    batch_size = config.get('batch_size', 20)
+    max_instance_length = config.get('max_instance_length', 30)
     validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
-    validate_interval = config.get('validate_interval', len(train_set.instances))
+    validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', 10*batch_size)
     optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
     optim_args = config.get('optim_args', {})
@@ -113,12 +113,12 @@ def train_model(config):
     signal.signal(signal.SIGINT, handler)
     print('Starting training')
     while not should_stop:
-        print('\rStep %d', end='')
+        print('\rStep %d' % step, end='')
         if step % validate_interval == 0:
             print('\nValidation scores at step %d:' % step)
             scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length)
             for metric in validate_metrics:
-                print('  %s: %f' % (metric, step, scores[metric]))
+                print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
             validate_record.append(scores)
 

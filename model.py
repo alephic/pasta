@@ -74,13 +74,13 @@ class PastaEncoder(Model):
     def __init__(self, vocab, config):
         super(PastaEncoder, self).__init__(vocab)
         self.config = config
-        word_emb_size = config.get('word_emb_size', 256)
+        word_emb_size = config.get('word_emb_size', 128)
         self.word_dropout = config.get('word_dropout', 0.05)
-        self.word_lstm_size = config.get('word_lstm_size', 512)
+        self.word_lstm_size = config.get('word_lstm_size', 256)
         word_lstm_layers = config.get('word_lstm_layers', 2)
         word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
-        char_emb_size = config.get('char_emb_size', 64)
-        char_cnn_filters = config.get('char_lstm_size', 64)
+        char_emb_size = config.get('char_emb_size', 32)
+        char_cnn_filters = config.get('char_cnn_filters', 32)
         latent_size = config.get('latent_size', 256)
         dist_mlp_hidden_size = config.get('dist_mlp_hidden_size', latent_size)
         self.word_emb = Embedding(
