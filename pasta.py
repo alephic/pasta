@@ -28,11 +28,6 @@ def get_kl_divergence_from_normal(mu, sigma):
     sigma_squared = sigma ** 2
     return -0.5 * torch.sum(1 + torch.log(sigma_squared) - mu**2 - sigma_squared)
 
-def get_sequence_mask_from_lengths(lengths_var, max_length):
-    indices = Variable(torch.cuda.LongTensor(np.arange(max_length)), requires_grad=False)
-    indices = indices.unsqueeze(0).expand(lengths_var.size()[0], -1)
-    return (indices < lengths_var.unsqueeze(1).expand(-1, max_length)).float()
-
 def load(json_filename):
     with open(json_filename) as f:
         text_list = json.load(f)
@@ -114,11 +109,11 @@ class PastaEncoder(Model):
             return token_indices_array
 
     def get_target_indices(self, token_indices_array, input_lengths):
-        array = np.roll(token_indices_array, -1, axis=1)
-        array[:, -1] = 0
+        array = token_indices_array[:, 1:]
         eos = self.vocab.get_vocab_size(namespace='tokens')
         for i, length in enumerate(input_lengths):
-            array[i, length-1] = eos
+            if length <= array.shape[1]:
+                array[i, length-1] = eos
         return Variable(torch.cuda.LongTensor(array), requires_grad=False)
     
     def embed_inputs(self, array_dict):
@@ -143,8 +138,8 @@ class PastaEncoder(Model):
     def get_reconstruction_logits(self, latent_var, inputs, input_lengths_var: Variable):
         inputs_and_latent = torch.cat(
             (
-                inputs,
-                latent_var.unsqueeze(1).expand(-1, inputs.size()[1], -1)
+                inputs[:, :-1],
+                latent_var.unsqueeze(1).expand(-1, inputs.size()[1] - 1, -1)
             ),
             2
         )
@@ -153,11 +148,11 @@ class PastaEncoder(Model):
         packed_logits = PackedSequence(self.word_dec_project(word_dec_out.data), word_dec_out.batch_sizes)
         return pad_packed_sequence(packed_logits, batch_first=True)[0].contiguous()
 
-    def forward(self, data: Dataset, kl_weight=1.0, reconstruct=True):
+    def forward(self, batch: Dataset, kl_weight=1.0, reconstruct=True):
         output_dict = {}
-        array_dict = data.as_array_dict()
+        array_dict = batch.as_array_dict()
         embedded = self.embed_inputs(array_dict)
-        lengths = [len(instance.fields['text'].tokens) for instance in data.instances]
+        lengths = [len(instance.fields['text'].tokens) for instance in batch.instances]
         lengths_var = Variable(torch.cuda.LongTensor(lengths), requires_grad=False)
         sorted_embedded, sorted_lengths_var, unsort_indices = sort_batch_by_length(embedded, lengths_var)
         mu, sigma = self.get_latent_dist_params(sorted_embedded, sorted_lengths_var)
@@ -167,7 +162,7 @@ class PastaEncoder(Model):
             sampled_latent = torch.normal(mu, sigma)
             reconstruction_logits = self.get_reconstruction_logits(sampled_latent, sorted_embedded, sorted_lengths_var)
             target_indices = self.get_target_indices(array_dict['text']['tokens'], lengths)
-            xent_mask = get_sequence_mask_from_lengths(sorted_lengths_var, target_indices.size()[1])
+            xent_mask = (target_indices != 0).float()
             xent = sequence_cross_entropy_with_logits(reconstruction_logits, target_indices, xent_mask, batch_average=False)
             dkl = get_kl_divergence_from_normal(mu, sigma)
             loss_vec = kl_weight * dkl + xent
@@ -205,7 +200,8 @@ def test_forward():
     print("Loading dataset")
     d = load('data/emojipasta.json')
     print("Generating vocabulary")
-    v = Vocabulary.from_dataset(d, min_count=2, max_vocab_size=4000)
+    v = Vocabulary.from_dataset(d, min_count=2, max_vocab_size={'tokens':4000})
+    print(v.get_vocab_size())
     print("Creating test batch")
     b = Dataset(d.instances[:10])
     b.index_instances(v)
