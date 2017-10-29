@@ -48,8 +48,13 @@ def partition_dataset(dataset: Dataset, ratio: float):
     return Dataset(dataset.instances[:split_index]), Dataset(dataset.instances[split_index:])
 
 def slice_instance(instance: Instance, max_instance_length: int):
-    start_index = random.randint(0, max(0, len(instance['text'].tokens) - max_instance_length))
-    return Instance({'text': TextField(instance['text'].tokens[start_index:start_index + max_instance_length], instance['text'].token_indexers)})
+    start_index = random.randint(0, max(0, len(instance.fields['text'].tokens) - max_instance_length))
+    return Instance({
+        'text': TextField(
+            instance.fields['text'].tokens[start_index:start_index + max_instance_length],
+            instance.fields['text'].token_indexers
+        )
+    })
 
 def get_batch(dataset: Dataset, batch_size: int, max_instance_length: int):
     instances = random.sample(dataset.instances, batch_size)
