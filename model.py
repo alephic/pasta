@@ -201,7 +201,7 @@ class PastaEncoder(Model):
         target_indices = output_dict.get('target_indices')
         print('target_indices:', target_indices.shape)
         length = target_indices.size()[1] if target_indices is not None else max_length
-        print('length': length)
+        print('length:', length)
         batch_size = output_dict['decode_inputs'].shape[0]
         sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev']).unsqueeze(1)
         eos = self.vocab.get_vocab_size(namespace='tokens')
