@@ -197,9 +197,9 @@ class PastaEncoder(Model):
             output_dict['loss'] = torch.sum(loss_vec)
         return output_dict
 
-    def decode(self, output_dict, max_length=None):
+    def decode(self, output_dict, max_length=200):
         target_indices = output_dict.get('target_indices')
-        length = max_length or target_indices.size()[1]
+        length = target_indices.size()[1] if target_indices is not None else max_length
         batch_size = target_indices.size()[0]
         sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev']).unsqueeze(1)
         eos = self.vocab.get_vocab_size(namespace='tokens')
@@ -215,12 +215,13 @@ class PastaEncoder(Model):
             dropout_weights = Variable(dropout_weights, requires_grad=False)
         else:
             dropout_weights = None
-        while len(decoded_slices) < length:
+        for t in range(length):
             if self.decode_word_dropout > 0:
                 input_drop_mask = torch.cuda.LongTensor(batch_size)
                 input_drop_mask.bernoulli_(self.decode_word_dropout)
                 input_drop_mask = Variable(input_drop_mask, requires_grad=False)
                 input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
+
             inputs = torch.cat(
                 (self.word_emb(input_indices).unsqueeze(1), sampled_latent),
                 2
@@ -231,15 +232,18 @@ class PastaEncoder(Model):
             out = h[-1, 0] # out.size(): (batch_size, word_lstm_size)
             logits = self.word_dec_project(out)
             decoded_logits_slices.append(logits)
+
             _, argmax = torch.max(logits, 1)
             decoded_indices_slices.append(argmax)
             input_indices = argmax
-            if self.decode_teacher_force_rate > 0:
+
+            if self.training and self.decode_teacher_force_rate > 0:
                 input_force_mask = torch.cuda.LongTensor(batch_size)
                 input_force_mask.bernoulli_(self.decode_teacher_force_rate)
                 input_force_mask = Variable(input_force_mask, requires_grad=False)
-                gold_indices = Variable(torch.cuda.LongTensor(output_dict))
-                input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * Variable(torch.cuda.LongTensor()))
+                gold_indices = Variable(torch.cuda.LongTensor(target_indices[:, t]), requires_grad=False)
+                input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
+        
         output_dict['decoded_logits'] = torch.stack(decoded_logits_slices, 1)
         output_dict['decoded_indices'] = torch.stack(decoded_indices_slices, 1)
         return output_dict
