@@ -221,13 +221,11 @@ class PastaEncoder(Model):
                 input_drop_mask.bernoulli_(self.decode_word_dropout)
                 input_drop_mask = Variable(input_drop_mask, requires_grad=False)
                 input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
-            print('input_indices (t=0):', input_indices.size())
 
             inputs = torch.cat(
                 (self.word_emb(input_indices).unsqueeze(1), sampled_latent),
                 2
             )
-            print('inputs (t=0):', inputs.size())
             _, h, c = self.word_dec(pack_padded_sequence(inputs, lengths, batch_first=True), dropout_weights=dropout_weights, h0=h_prev, c0=c_prev)
             h_prev = h[:, 0] # all layers, t=0
             c_prev = c[:, 0]
