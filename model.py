@@ -176,7 +176,7 @@ class PastaEncoder(Model):
         output_dict['latent_stdev'] = sigma
         if reconstruct or self.training:
             # Reconstruct
-            target_indices = Variable(torch.cuda.LongTensor(batch['text']['tokens'][:, 1:]), requires_grad=False)
+            target_indices = Variable(torch.cuda.LongTensor(batch['text']['tokens'][:, 1:].copy()), requires_grad=False)
             output_dict['target_indices'] = target_indices
             output_dict['decode_inputs'] = Variable(torch.cuda.LongTensor(batch['text']['tokens'][:, 0]), requires_grad=False)
             self.decode(output_dict)
