@@ -240,7 +240,7 @@ class PastaEncoder(Model):
                 input_force_mask = torch.cuda.LongTensor(batch_size)
                 input_force_mask.bernoulli_(self.decode_teacher_force_rate)
                 input_force_mask = Variable(input_force_mask, requires_grad=False)
-                gold_indices = Variable(torch.cuda.LongTensor(target_indices[:, t]), requires_grad=False)
+                gold_indices = target_indices[:, t]
                 input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
         
         output_dict['decoded_logits'] = torch.stack(decoded_logits_slices, 1)
