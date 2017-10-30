@@ -76,8 +76,8 @@ class PastaEncoder(Model):
         self.config = config
         word_emb_size = config.get('word_emb_size', 128)
         self.input_word_dropout = config.get('input_word_dropout', 0.05)
-        self.decode_word_dropout = config.get('decode_word_dropout', 0.25)
-        self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.0)
+        self.decode_word_dropout = config.get('decode_word_dropout', 0.0)
+        self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.05)
         self.word_lstm_size = config.get('word_lstm_size', 256)
         word_lstm_layers = config.get('word_lstm_layers', 2)
         self.word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
