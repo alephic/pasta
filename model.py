@@ -184,9 +184,9 @@ class PastaEncoder(Model):
         output_dict['latent_mean'] = mu
         output_dict['latent_stdev'] = sigma
         if reconstruct:
-            reconstruction_logits = self.get_reconstruction_logits(sampled_latent, sorted_embedded, sorted_lengths_var)
+            output_dict['target'] = self.get_target_indices(batch['text']['tokens'], lengths)
+            self.decode(output_dict, length=)
             reconstruction_logits = torch.index_select(reconstruction_logits, 0, unsort_indices)
-            target_indices = self.get_target_indices(batch['text']['tokens'], lengths)
             xent_mask = (target_indices != 0).float()
             xent = sequence_cross_entropy_with_logits(reconstruction_logits, target_indices, xent_mask, batch_average=False)
             dkl = get_kl_divergence_from_normal(mu, sigma)
