@@ -200,7 +200,7 @@ class PastaEncoder(Model):
     def decode(self, output_dict, max_length=200):
         target_indices = output_dict.get('target_indices')
         length = target_indices.size()[1] if target_indices is not None else max_length
-        batch_size = target_indices.size()[0]
+        batch_size = output_dict['decode_inputs'].shape[0]
         sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev']).unsqueeze(1)
         eos = self.vocab.get_vocab_size(namespace='tokens')
         h_prev = None
@@ -221,11 +221,13 @@ class PastaEncoder(Model):
                 input_drop_mask.bernoulli_(self.decode_word_dropout)
                 input_drop_mask = Variable(input_drop_mask, requires_grad=False)
                 input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
+            print('input_indices (t=0):', input_indices.size())
 
             inputs = torch.cat(
                 (self.word_emb(input_indices).unsqueeze(1), sampled_latent),
                 2
             )
+            print('inputs (t=0):', inputs.size())
             _, h, c = self.word_dec(pack_padded_sequence(inputs, lengths, batch_first=True), dropout_weights=dropout_weights, h0=h_prev, c0=c_prev)
             h_prev = h[:, 0] # all layers, t=0
             c_prev = c[:, 0]
