@@ -75,7 +75,9 @@ class PastaEncoder(Model):
         super(PastaEncoder, self).__init__(vocab)
         self.config = config
         word_emb_size = config.get('word_emb_size', 128)
-        self.word_dropout = config.get('word_dropout', 0.05)
+        self.input_word_dropout = config.get('input_word_dropout', 0.05)
+        self.decode_word_dropout = config.get('decode_word_dropout', 0.25)
+        self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.0)
         self.word_lstm_size = config.get('word_lstm_size', 256)
         word_lstm_layers = config.get('word_lstm_layers', 2)
         word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
@@ -128,7 +130,7 @@ class PastaEncoder(Model):
         # Model is GPU-only
         self.cuda()
 
-    def do_word_dropout(self, token_indices_array):
+    def do_input_word_dropout(self, token_indices_array):
         if self.training:
             token_mask = (token_indices_array != 0).astype(int)
             drop_mask = (np.random.rand(*token_indices_array.shape) < self.word_dropout).astype(int)
@@ -165,37 +167,23 @@ class PastaEncoder(Model):
         return embedded_flat.view(tokens_array.shape[0], tokens_array.shape[1], embedded_flat.size()[1]).contiguous()
 
     def get_latent_dist_params(self, inputs, input_lengths_var: Variable):
-        packed_inputs = pack_padded_sequence(inputs, input_lengths_var.data.tolist(), batch_first=True)
+        sorted_inputs, sorted_lengths_var, unsort_indices = sort_batch_by_length(inputs, input_lengths_var)
+        packed_inputs = pack_padded_sequence(sorted_inputs, sorted_lengths_var.data.tolist(), batch_first=True)
         word_enc_out = self.word_enc(packed_inputs)[0]
         padded = pad_packed_sequence(word_enc_out, batch_first=True)[0]
-        last_indices = (input_lengths_var - 1).view(padded.size()[0], 1, 1).expand(-1, -1, padded.size()[2])
-        encodings = padded.gather(1, last_indices).squeeze(1)
+        last_indices = (sorted_lengths_var - 1).view(padded.size()[0], 1, 1).expand(-1, -1, padded.size()[2])
+        encodings = padded.gather(1, last_indices).squeeze(1).index_select(0, unsort_indices)
         return self.dist_mlp(encodings).chunk(2, dim=1)
 
-    def get_reconstruction_logits(self, latent_var, inputs, input_lengths_var: Variable):
-        inputs_and_latent = torch.cat(
-            (
-                inputs[:, :-1],
-                latent_var.unsqueeze(1).expand(-1, inputs.size()[1] - 1, -1)
-            ),
-            2
-        )
-        packed_inputs = pack_padded_sequence(inputs_and_latent, [min(length, inputs_and_latent.size()[1]) for length in input_lengths_var.data.tolist()], batch_first=True)
-        word_dec_out = self.word_dec(packed_inputs)[0]
-        packed_logits = PackedSequence(self.word_dec_project(word_dec_out.data), word_dec_out.batch_sizes)
-        return pad_packed_sequence(packed_logits, batch_first=True)[0]
-
     def forward(self, batch, kl_weight=1.0, reconstruct=True):
-        output_dict = {}
+        output_dict = {'input': batch}
         lengths = (batch['text']['tokens'] != 0).astype(int).sum(axis=1).tolist()
         lengths_var = Variable(torch.cuda.LongTensor(lengths), requires_grad=False)
         embedded = self.embed_inputs(batch)
-        sorted_embedded, sorted_lengths_var, unsort_indices = sort_batch_by_length(embedded, lengths_var)
-        mu, sigma = self.get_latent_dist_params(sorted_embedded, sorted_lengths_var)
-        output_dict['latent_mean'] = torch.index_select(mu, 0, unsort_indices)
-        output_dict['latent_stdev'] = torch.index_select(sigma, 0, unsort_indices)
+        mu, sigma = self.get_latent_dist_params(embedded, lengths_var)
+        output_dict['latent_mean'] = mu
+        output_dict['latent_stdev'] = sigma
         if reconstruct:
-            sampled_latent = torch.normal(mu, sigma)
             reconstruction_logits = self.get_reconstruction_logits(sampled_latent, sorted_embedded, sorted_lengths_var)
             reconstruction_logits = torch.index_select(reconstruction_logits, 0, unsort_indices)
             target_indices = self.get_target_indices(batch['text']['tokens'], lengths)
@@ -210,7 +198,7 @@ class PastaEncoder(Model):
             output_dict['loss'] = torch.sum(loss_vec)
         return output_dict
 
-    def decode(self, output_dict, min_length=100, max_length=500):
+    def decode(self, output_dict, length=None):
         sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev']).unsqueeze(1)
         batch_size = sampled_latent.size()[0]
         eos = self.vocab.get_vocab_size(namespace='tokens')
