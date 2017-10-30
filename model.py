@@ -175,7 +175,7 @@ class PastaEncoder(Model):
         encodings = padded.gather(1, last_indices).squeeze(1).index_select(0, unsort_indices)
         return self.dist_mlp(encodings).chunk(2, dim=1)
 
-    def forward(self, batch, kl_weight=1.0):
+    def forward(self, batch, kl_weight=1.0, reconstruct=True):
         output_dict = {}
         lengths = (batch['text']['tokens'] != 0).astype(int).sum(axis=1).tolist()
         lengths_var = Variable(torch.cuda.LongTensor(lengths), requires_grad=False)
@@ -183,7 +183,7 @@ class PastaEncoder(Model):
         mu, sigma = self.get_latent_dist_params(embedded, lengths_var)
         output_dict['latent_mean'] = mu
         output_dict['latent_stdev'] = sigma
-        if self.training:
+        if reconstruct or self.training:
             # Reconstruct
             target_indices = self.get_target_indices(batch['text']['tokens'], lengths)
             output_dict['target_indices'] = target_indices
