@@ -80,7 +80,7 @@ class PastaEncoder(Model):
         self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.0)
         self.word_lstm_size = config.get('word_lstm_size', 256)
         word_lstm_layers = config.get('word_lstm_layers', 2)
-        word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
+        self.word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
         char_emb_size = config.get('char_emb_size', 32)
         char_cnn_filters = config.get('char_cnn_filters', 32)
         latent_size = config.get('latent_size', 256)
@@ -104,7 +104,7 @@ class PastaEncoder(Model):
             word_emb_size,
             self.word_lstm_size,
             num_layers=word_lstm_layers,
-            recurrent_dropout_prob=word_lstm_dropout
+            recurrent_dropout_prob=self.word_lstm_dropout
         )
         self.dist_mlp = nn.Sequential(
             nn.Linear(self.word_lstm_size, dist_mlp_hidden_size),
@@ -210,9 +210,9 @@ class PastaEncoder(Model):
         decoded_indices_slices = []
         dropout_weights = torch.cuda.FloatTensor(self.word_dec.num_layers, batch_size, self.word_dec.hidden_size)
         if self.training:
-            dropout_weights.bernoulli_(1 - self.decode_recurrent_dropout)
+            dropout_weights.bernoulli_(1 - self.word_lstm_dropout)
         else:
-            dropout_weights.fill_(1 - self.decode_recurrent_dropout)
+            dropout_weights.fill_(1 - self.word_lstm_dropout)
         dropout_weights = Variable(dropout_weights, requires_grad=False)
         for t in range(length):
             if self.decode_word_dropout > 0:
