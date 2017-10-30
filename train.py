@@ -33,7 +33,7 @@ MODEL_SAVE_DIR = 'trained_models'
 def load_dataset(json_filename):
     with open(json_filename) as f:
         text_list = json.load(f)
-    tokenizer = WordTokenizer(start_tokens=['@@SOS@@'])
+    tokenizer = WordTokenizer(start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
     indexers = {'tokens': SingleIdTokenIndexer(), 'token_characters': TokenCharactersIndexer()}
     dataset = Dataset(list(tqdm((
         Instance({

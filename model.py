@@ -111,20 +111,19 @@ class PastaEncoder(Model):
             nn.ReLU(),
             nn.Linear(dist_mlp_hidden_size, 2*latent_size)
         )
-        self.word_dec = torch.nn.LSTM(
+        self.word_dec = HighwayLSTMLayer(
             word_emb_size + latent_size,
             self.word_lstm_size,
-            word_lstm_layers,
-            batch_first=True
+            num_layers=word_lstm_layers
         )
         self.word_dec_project = nn.Linear(
             self.word_lstm_size,
-            vocab.get_vocab_size(namespace='tokens') + 1 # extra slot for EOS
+            vocab.get_vocab_size(namespace='tokens')
         )
         #self.char_dec_lstm_cell = nn.modules.LSTMCell(self.word_lstm_size, char_lstm_size)
         #self.char_dec_project = nn.Linear(
         #    char_lstm_size,
-        #    vocab.get_vocab_size(namespace='token_characters') + 1 # extra slot for EOS
+        #    vocab.get_vocab_size(namespace='token_characters')
         #)
 
         # Model is GPU-only
@@ -137,14 +136,6 @@ class PastaEncoder(Model):
             return (token_indices_array * (1-drop_mask)) + token_mask*drop_mask
         else:
             return token_indices_array
-
-    def get_target_indices(self, token_indices_array, input_lengths):
-        array = token_indices_array[:, 1:].copy()
-        eos = self.vocab.get_vocab_size(namespace='tokens')
-        for i, length in enumerate(input_lengths):
-            if length <= array.shape[1]:
-                array[i, length-1] = eos
-        return Variable(torch.cuda.LongTensor(array), requires_grad=False)
     
     def embed_inputs(self, array_dict):
         tokens_array = self.do_input_word_dropout(array_dict['text']['tokens'])
@@ -185,9 +176,9 @@ class PastaEncoder(Model):
         output_dict['latent_stdev'] = sigma
         if reconstruct or self.training:
             # Reconstruct
-            target_indices = self.get_target_indices(batch['text']['tokens'], lengths)
+            target_indices = Variable(torch.cuda.LongTensor(batch['text']['tokens'][:, 1:]), requires_grad=False)
             output_dict['target_indices'] = target_indices
-            output_dict['decode_inputs'] = batch['text']['tokens'][:, 0]
+            output_dict['decode_inputs'] = Variable(torch.cuda.LongTensor(batch['text']['tokens'][:, 0]), requires_grad=False)
             self.decode(output_dict)
             reconstructed_logits = output_dict['decoded_logits']
             xent_mask = (target_indices != 0).float()
@@ -199,37 +190,44 @@ class PastaEncoder(Model):
 
     def decode(self, output_dict, max_length=200):
         target_indices = output_dict.get('target_indices')
+        batch_size = target_indices.size()[0]
         length = target_indices.size()[1] if target_indices is not None else max_length
-        batch_size = output_dict['decode_inputs'].shape[0]
         sampled_latent = torch.normal(output_dict['latent_mean'], output_dict['latent_stdev']).unsqueeze(1)
-        eos = self.vocab.get_vocab_size(namespace='tokens')
-        prev_state = None
-        input_indices = Variable(torch.cuda.LongTensor(output_dict['decode_inputs']), requires_grad=False)
+        h_prev = None
+        c_prev = None
+        input_indices = output_dict['decode_inputs']
         lengths = [1]*batch_size
         decoded_logits_slices = []
         decoded_indices_slices = []
-        #dropout_weights = torch.cuda.FloatTensor(self.word_dec.num_layers, batch_size, self.word_dec.hidden_size)
-        #if self.training:
-        #    dropout_weights.bernoulli_(1 - self.word_lstm_dropout)
-        #else:
-        #    dropout_weights.fill_(1 - self.word_lstm_dropout)
-        #dropout_weights = Variable(dropout_weights, requires_grad=False)
+        # Pre-sample recurrent dropout
+        if self.training:
+            dropout_weights = torch.cuda.FloatTensor(self.word_dec.num_layers, batch_size, self.word_dec.hidden_size)
+            dropout_weights.bernoulli_(1 - self.word_lstm_dropout)
+            dropout_weights = Variable(dropout_weights, requires_grad=False)
+        else:
+            dropout_weights = None
+        # Loop over timesteps
         for t in range(length):
-            #if self.decode_word_dropout > 0:
-            #    input_drop_mask = torch.cuda.LongTensor(batch_size)
-            #    input_drop_mask.bernoulli_(self.decode_word_dropout)
-            #    input_drop_mask = Variable(input_drop_mask, requires_grad=False)
-            #    input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
+            # Word dropout
+            if self.decode_word_dropout > 0:
+                input_drop_mask = torch.cuda.LongTensor(batch_size)
+                input_drop_mask.bernoulli_(self.decode_word_dropout)
+                input_drop_mask = Variable(input_drop_mask, requires_grad=False)
+                input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
 
             inputs = torch.cat(
                 (self.word_emb(input_indices).unsqueeze(1), sampled_latent),
                 2
             )
-            #if prev_state is not None:
-            #    prev_state = (prev_state[0] * dropout_weights, prev_state[1])
-            _, (h, c) = self.word_dec(inputs, prev_state)
-            prev_state = (h, c)
-            out = h[-1, :] # out.size(): (batch_size, word_lstm_size)
+            _, h, c = self.word_dec(
+                pack_padded_sequence(inputs, lengths, batch_first=True),
+                h0=h_prev,
+                c0=c_prev,
+                dropout_weights=dropout_weights
+            )
+            h_prev = h[:, 0] # all layers, t=0
+            c_prev = c[:, 0]
+            out = h[-1, 0] # out.size(): (batch_size, word_lstm_size)
             logits = self.word_dec_project(out)
             decoded_logits_slices.append(logits)
 
@@ -237,12 +235,13 @@ class PastaEncoder(Model):
             decoded_indices_slices.append(argmax)
             input_indices = argmax
 
-            #if self.training and self.decode_teacher_force_rate > 0:
-            #    input_force_mask = torch.cuda.LongTensor(batch_size)
-            #    input_force_mask.bernoulli_(self.decode_teacher_force_rate)
-            #    input_force_mask = Variable(input_force_mask, requires_grad=False)
-            #    gold_indices = Variable(torch.cuda.LongTensor(target_indices[:, t]), requires_grad=False)
-            #    input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
+            # Teacher forcing
+            if self.training and self.decode_teacher_force_rate > 0:
+                input_force_mask = torch.cuda.LongTensor(batch_size)
+                input_force_mask.bernoulli_(self.decode_teacher_force_rate)
+                input_force_mask = Variable(input_force_mask, requires_grad=False)
+                gold_indices = Variable(torch.cuda.LongTensor(target_indices[:, t]), requires_grad=False)
+                input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
         
         output_dict['decoded_logits'] = torch.stack(decoded_logits_slices, 1)
         output_dict['decoded_indices'] = torch.stack(decoded_indices_slices, 1)
@@ -250,15 +249,16 @@ class PastaEncoder(Model):
 
     def make_readable(self, decoded):
         out = []
+        eos = self.vocab.get_token_index('@@EOS@@')
         for i in range(decoded.size()[0]):
             out_line = []
             for t in range(decoded.size()[1]):
                 curr = decoded.data[i, t]
-                if curr == 0:
+                if curr == eos:
                     break
                 elif curr == 1:
                     out_line.append('_')
-                elif curr < self.vocab.get_vocab_size():
+                else:
                     out_line.append(self.vocab.get_token_from_index(curr))
             out.append(' '.join(out_line))
         return out
