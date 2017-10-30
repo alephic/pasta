@@ -147,7 +147,7 @@ class PastaEncoder(Model):
         return Variable(torch.cuda.LongTensor(array), requires_grad=False)
     
     def embed_inputs(self, array_dict):
-        tokens_array = self.do_word_dropout(array_dict['text']['tokens'])
+        tokens_array = self.do_input_word_dropout(array_dict['text']['tokens'])
         tokens_array_flat = tokens_array.reshape(tokens_array.size)
         chars_array = array_dict['text']['token_characters']
 
