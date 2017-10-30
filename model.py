@@ -229,7 +229,6 @@ class PastaEncoder(Model):
                 prev_state = (prev_state[0] * dropout_weights, prev_state[1])
             _, (h, c) = self.word_dec(inputs, prev_state)
             prev_state = (h, c)
-            print(h.size())
             out = h[-1, :] # out.size(): (batch_size, word_lstm_size)
             logits = self.word_dec_project(out)
             decoded_logits_slices.append(logits)
