@@ -68,7 +68,7 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
 
 def get_kl_divergence_from_normal(mu, sigma):
     sigma_squared = sigma ** 2
-    return -0.5 * torch.sum(1 + torch.log(sigma_squared) - mu**2 - sigma_squared)
+    return -0.5 * torch.sum(1 + torch.log(sigma_squared) - mu**2 - sigma_squared, 1)
 
 class PastaEncoder(Model):
     def __init__(self, vocab, config):
@@ -192,7 +192,7 @@ class PastaEncoder(Model):
             reconstructed_logits = output_dict['decoded_logits']
             xent_mask = (target_indices != 0).float()
             xent = sequence_cross_entropy_with_logits(reconstructed_logits, target_indices, xent_mask, batch_average=False)
-            dkl = get_kl_divergence_from_normal(mu, sigma).sum(1)
+            dkl = get_kl_divergence_from_normal(mu, sigma)
             loss_vec = kl_weight * dkl + xent
             output_dict['loss'] = torch.sum(loss_vec)
         return output_dict
