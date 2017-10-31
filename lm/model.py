@@ -87,8 +87,8 @@ class LanguageModel(Model):
     targets = input_var[:, 1:]
     length = targets.size(1) if self.training else unroll_length
     batch_size = input_var.size(0)
-    h = self.h0.unsqueeze(0).expand(batch_size, -1, -1)
-    c = self.c0.unsqueeze(0).expand(batch_size, -1, -1)
+    h = self.h0.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+    c = self.c0.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
     input_indices = input_var[:, :1]
     logit_slices = []
     index_slices = []
