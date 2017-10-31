@@ -111,7 +111,7 @@ def train_model(config):
     batch_size = config.get('batch_size', 40)
     max_instance_length = config.get('max_instance_length', 30)
     max_token_length = config.get('max_token_length', 20)
-    validate_metrics = config.get('validate_metrics', ['loss'])
+    validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', 10*batch_size)
     optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
