@@ -77,97 +77,99 @@ class PastaEncoder(Model):
     def __init__(self, vocab, config):
         super(PastaEncoder, self).__init__(vocab)
         self.config = config
-        word_emb_size = config.get('word_emb_size', 128)
-        self.input_word_dropout = config.get('input_word_dropout', 0.0)
-        self.decode_word_dropout = config.get('decode_word_dropout', 0.0)
-        self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.05)
-        self.word_lstm_size = config.get('word_lstm_size', 256)
-        word_lstm_layers = config.get('word_lstm_layers', 2)
-        self.word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
-        self.char_aware = config.get('char_aware', True)
-        if self.char_aware:
-            char_emb_size = config.get('char_emb_size', 32)
-            char_cnn_filters = config.get('char_cnn_filters', 32)
-            self.char_emb = Embedding(
-                vocab.get_vocab_size(namespace='token_characters'),
-                char_emb_size,
+        token_emb_size = config.get('token_emb_size', 128)
+        self.input_token_dropout = config.get('input_token_dropout', 0.0)
+        self.decode_token_dropout = config.get('decode_token_dropout', 0.0)
+        self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.01)
+        self.kl_weight = 0.0
+        self.token_lstm_size = config.get('token_lstm_size', 256)
+        token_lstm_layers = config.get('token_lstm_layers', 2)
+        self.token_lstm_dropout = config.get('token_lstm_dropout', 0.1)
+        self.char_level = config.get('char_level', True)
+        self.character_aware = config.get('character_aware', not self.char_level)
+        if self.character_aware:
+            character_emb_size = config.get('character_emb_size', 32)
+            character_cnn_filters = config.get('character_cnn_filters', 32)
+            self.character_emb = Embedding(
+                vocab.get_vocab_size(namespace='characters'),
+                character_emb_size,
                 padding_index=0
             )
-            self.char_enc = TimeDistributed(CnnEncoder(
-                char_emb_size,
-                char_cnn_filters,
-                output_dim=word_emb_size
+            self.character_enc = TimeDistributed(CnnEncoder(
+                character_emb_size,
+                character_cnn_filters,
+                output_dim=token_emb_size
             ))
         latent_size = config.get('latent_size', 256)
         dist_mlp_hidden_size = config.get('dist_mlp_hidden_size', latent_size)
-        self.word_emb = Embedding(
+        self.token_emb = Embedding(
             vocab.get_vocab_size(namespace='tokens'),
-            word_emb_size,
+            token_emb_size,
             padding_index=0
         )
-        self.word_enc = HighwayLSTMLayer(
-            word_emb_size,
-            self.word_lstm_size,
-            num_layers=word_lstm_layers,
-            recurrent_dropout_prob=self.word_lstm_dropout
+        self.token_enc = HighwayLSTMLayer(
+            token_emb_size,
+            self.token_lstm_size,
+            num_layers=token_lstm_layers,
+            recurrent_dropout_prob=self.token_lstm_dropout
         )
         self.dist_mlp = nn.Sequential(
-            nn.Linear(self.word_lstm_size, dist_mlp_hidden_size),
+            nn.Linear(self.token_lstm_size, dist_mlp_hidden_size),
             nn.ReLU(),
             nn.Linear(dist_mlp_hidden_size, 2*latent_size)
         )
-        self.word_dec = HighwayLSTMLayer(
-            word_emb_size + latent_size,
-            self.word_lstm_size,
-            num_layers=word_lstm_layers
+        self.token_dec = HighwayLSTMLayer(
+            token_emb_size + latent_size,
+            self.token_lstm_size,
+            num_layers=token_lstm_layers
         )
-        self.word_dec_project = nn.Linear(
-            self.word_lstm_size,
+        self.token_dec_project = nn.Linear(
+            self.token_lstm_size,
             vocab.get_vocab_size(namespace='tokens')
         )
-        #self.char_dec_lstm_cell = nn.modules.LSTMCell(self.word_lstm_size, char_lstm_size)
-        #self.char_dec_project = nn.Linear(
-        #    char_lstm_size,
-        #    vocab.get_vocab_size(namespace='token_characters')
+        #self.character_dec_lstm_cell = nn.modules.LSTMCell(self.token_lstm_size, character_lstm_size)
+        #self.character_dec_project = nn.Linear(
+        #    character_lstm_size,
+        #    vocab.get_vocab_size(namespace='characters')
         #)
 
         # Model is GPU-only
         self.cuda()
 
-    def do_input_word_dropout(self, token_indices_array):
-        if self.training and self.input_word_dropout > 0.0:
+    def do_input_token_dropout(self, token_indices_array):
+        if self.training and self.input_token_dropout > 0.0:
             token_mask = (token_indices_array != 0).astype(int)
-            drop_mask = (np.random.rand(*token_indices_array.shape) < self.input_word_dropout).astype(int)
+            drop_mask = (np.random.rand(*token_indices_array.shape) < self.input_token_dropout).astype(int)
             return (token_indices_array * (1-drop_mask)) + token_mask*drop_mask
         else:
             return token_indices_array
     
     def embed_inputs(self, array_dict):
-        tokens_array = self.do_input_word_dropout(array_dict['text']['tokens'])
+        tokens_array = self.do_input_token_dropout(array_dict['text']['tokens'])
 
-        embedded = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array), requires_grad=False))
+        embedded = self.token_emb(Variable(torch.cuda.LongTensor(tokens_array), requires_grad=False))
 
-        if self.char_aware:
-            chars_array = array_dict['text']['token_characters']
+        if self.character_aware:
+            characters_array = array_dict['text']['characters']
 
-            chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array).contiguous(), requires_grad=False))
-            chars_mask = Variable(torch.cuda.FloatTensor((chars_array != 0).astype(float)), requires_grad=False)
-            chars_encoded = self.char_enc(chars_embedded, chars_mask)
+            characters_embedded = self.character_emb(Variable(torch.cuda.LongTensor(characters_array).contiguous(), requires_grad=False))
+            characters_mask = Variable(torch.cuda.FloatTensor((characters_array != 0).astype(float)), requires_grad=False)
+            characters_encoded = self.character_enc(characters_embedded, characters_mask)
 
-            embedded += chars_encoded
+            embedded += characters_encoded
 
         return embedded
 
     def get_latent_dist_params(self, inputs, input_lengths_var: Variable):
         sorted_inputs, sorted_lengths_var, unsort_indices = sort_batch_by_length(inputs, input_lengths_var)
         packed_inputs = pack_padded_sequence(sorted_inputs, sorted_lengths_var.data.tolist(), batch_first=True)
-        word_enc_out = self.word_enc(packed_inputs)[0]
-        padded = pad_packed_sequence(word_enc_out, batch_first=True)[0]
+        token_enc_out = self.token_enc(packed_inputs)[0]
+        padded = pad_packed_sequence(token_enc_out, batch_first=True)[0]
         last_indices = (sorted_lengths_var - 1).view(padded.size()[0], 1, 1).expand(-1, -1, padded.size()[2])
         encodings = padded.gather(1, last_indices).squeeze(1).index_select(0, unsort_indices)
         return self.dist_mlp(encodings).chunk(2, dim=1)
 
-    def forward(self, batch, kl_weight=1.0, reconstruct=True):
+    def forward(self, batch, reconstruct=True):
         output_dict = {}
         lengths = (batch['text']['tokens'] != 0).astype(int).sum(axis=1).tolist()
         lengths_var = Variable(torch.cuda.LongTensor(lengths), requires_grad=False)
@@ -185,7 +187,7 @@ class PastaEncoder(Model):
             xent_mask = (target_indices != 0).float()
             xent = sequence_cross_entropy_with_logits(reconstructed_logits, target_indices, xent_mask, batch_average=False)
             dkl = get_kl_divergence_from_normal(mu, sigma)
-            loss_vec = kl_weight * dkl + xent
+            loss_vec =  xent
             output_dict['accuracy'] = get_accuracy(output_dict['decoded_indices'], target_indices)
             output_dict['loss'] = torch.sum(loss_vec)
         return output_dict
@@ -203,25 +205,25 @@ class PastaEncoder(Model):
         decoded_indices_slices = []
         # Pre-sample recurrent dropout
         if self.training:
-            dropout_weights = torch.cuda.FloatTensor(self.word_dec.num_layers, batch_size, self.word_dec.hidden_size)
-            dropout_weights.bernoulli_(1 - self.word_lstm_dropout)
+            dropout_weights = torch.cuda.FloatTensor(self.token_dec.num_layers, batch_size, self.token_dec.hidden_size)
+            dropout_weights.bernoulli_(1 - self.token_lstm_dropout)
             dropout_weights = Variable(dropout_weights, requires_grad=False)
         else:
             dropout_weights = None
         # Loop over timesteps
         for t in range(length):
             # Word dropout
-            if self.decode_word_dropout > 0:
+            if self.decode_token_dropout > 0:
                 input_drop_mask = torch.cuda.LongTensor(batch_size)
-                input_drop_mask.bernoulli_(self.decode_word_dropout)
+                input_drop_mask.bernoulli_(self.decode_token_dropout)
                 input_drop_mask = Variable(input_drop_mask, requires_grad=False)
                 input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
 
             inputs = torch.cat(
-                (self.word_emb(input_indices).unsqueeze(1), sampled_latent),
+                (self.token_emb(input_indices).unsqueeze(1), sampled_latent),
                 2
             )
-            _, h, c = self.word_dec(
+            _, h, c = self.token_dec(
                 pack_padded_sequence(inputs, lengths, batch_first=True),
                 h0=h_prev,
                 c0=c_prev,
@@ -229,8 +231,8 @@ class PastaEncoder(Model):
             )
             h_prev = h[:, 0] # all layers, t=0
             c_prev = c[:, 0]
-            out = h[-1, 0] # out.size(): (batch_size, word_lstm_size)
-            logits = self.word_dec_project(out)
+            out = h[-1, 0] # out.size(): (batch_size, token_lstm_size)
+            logits = self.token_dec_project(out)
             decoded_logits_slices.append(logits)
 
             _, argmax = torch.max(logits, 1)
@@ -252,15 +254,17 @@ class PastaEncoder(Model):
     def make_readable(self, decoded):
         out = []
         eos = self.vocab.get_token_index('@@EOS@@')
+        unk = self.vocab.get_token_index('@@UNK@@')
         for i in range(decoded.size()[0]):
             out_line = []
             for t in range(decoded.size()[1]):
                 curr = decoded.data[i, t]
-                if curr == eos:
-                    break
-                elif curr == 1:
+                if curr == unk and self.char_level:
                     out_line.append('_')
                 else:
                     out_line.append(self.vocab.get_token_from_index(curr))
-            out.append(' '.join(out_line))
+            if self.char_level:
+                out.append(''.join(out_line))
+            else:
+                out.append(' '.join(out_line))
         return out

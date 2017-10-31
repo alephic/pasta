@@ -7,7 +7,7 @@ import sys
 from allennlp.data.fields import TextField
 from allennlp.data import Dataset, Instance, Vocabulary
 from allennlp.data.token_indexers import SingleIdTokenIndexer, TokenCharactersIndexer
-from allennlp.data.tokenizers import WordTokenizer
+from allennlp.data.tokenizers import WordTokenizer, CharacterTokenizer
 
 import torch
 
@@ -30,11 +30,16 @@ OPTIM_CLASSES = {
 
 MODEL_SAVE_DIR = 'trained_models'
 
-def load_dataset(json_filename):
+def load_dataset(json_filename, word_level=True):
     with open(json_filename) as f:
         text_list = json.load(f)
-    tokenizer = WordTokenizer(start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
-    indexers = {'tokens': SingleIdTokenIndexer(), 'token_characters': TokenCharactersIndexer()}
+    if word_level:
+        tokenizer = WordTokenizer(start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
+    else:
+        tokenizer = CharacterTokenizer(start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
+    indexers = {'tokens': SingleIdTokenIndexer()}
+    if word_level:
+        indexers['characters'] = TokenCharactersIndexer()
     dataset = Dataset(list(tqdm((
         Instance({
             'text': TextField(
@@ -56,7 +61,7 @@ def slice_instance(instance: Instance, max_instance_length: int):
         instance.fields['text']._token_indexers
     )})
 
-def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance_length: int, max_token_length: int):
+def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance_length: int, max_token_length: int = None):
     instances = random.sample(dataset.instances, batch_size)
     batch = Dataset([slice_instance(instance, max_instance_length) for instance in instances])
     for instance in batch.instances:
@@ -64,7 +69,8 @@ def get_batch(dataset: Dataset, vocab: Vocabulary, batch_size: int, max_instance
     array_dict = batch.as_array_dict(padding_lengths={'text': {
         'tokens': max_instance_length
     }})
-    array_dict['text']['token_characters'] = array_dict['text']['token_characters'][:, :, :max_token_length]
+    if 'characters' in array_dict['text']:
+        array_dict['text']['characters'] = array_dict['text']['characters'][:, :, :max_token_length]
     return array_dict
 
 def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length, max_token_length):
@@ -83,10 +89,17 @@ def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_
         remaining -= batch_size
     return {metric: total_score/samples for metric, total_score in total_metrics.items()}
 
+def create_example_pair(model, dataset, max_instance_length, max_token_length):
+    model.eval()
+    batch = get_batch(dataset, model.vocab, 1, max_instance_length, max_token_length)
+    batch_out = model(batch)
+    return (model.make_readable(batch_out['target_indices'])[0], model.make_readable(batch_out['decoded_indices'])[0])
+
 def train_model(config):
-    train_set_path = config.get('train_set_path', 'data/emojipasta_utf8.json')
+    word_level = config.get('word_level', False)
+    train_set_path = config.get('train_set_path', 'data/emojipasta_utf8_filtered.json')
     print('Loading training dataset:', train_set_path)
-    train_set = load_dataset(train_set_path)
+    train_set = load_dataset(train_set_path, word_level=word_level)
     validate_set_path = config.get('validate_set_path', None)
     if validate_set_path is None:
         train_set, validate_set = partition_dataset(train_set, config.get('train_partition', 0.9))
@@ -96,26 +109,34 @@ def train_model(config):
         print('Loading validation dataset:', validate_set)
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
+    if word_level:
+        max_vocab_size = {
+            'tokens': config.get('max_token_vocab_size', 40000),
+            'characters': config.get('max_character_vocab_size', 1000)
+        }
+    else:
+        max_vocab_size = {
+            'tokens': config.get('max_token_vocab_size', 4000),
+        }
     vocab = Vocabulary.from_dataset(
         train_set,
-        max_vocab_size={
-            'tokens': config.get('max_token_vocab_size', 4000),
-            'token_characters': config.get('max_char_vocab_size', 1000)
-        }
+        max_vocab_size=max_vocab_size
     )
-    print('Vocabulary has %d token entries and %d character entries' % (vocab.get_vocab_size(namespace='tokens'), vocab.get_vocab_size(namespace='token_characters')))
+    print('Vocabulary has %d token entries' % vocab.get_vocab_size(namespace='tokens'))
+    if word_level:
+        print('Vocabulary has %d character entries' % vocab.get_vocab_size(namespace='characters'))
     print('Initializing model')
     model = PastaEncoder(vocab, config.get('model_config', {}))
     step = 0
     validate_record = []
     batch_size = config.get('batch_size', 40)
-    max_instance_length = config.get('max_instance_length', 30)
+    max_instance_length = config.get('max_instance_length', 100)
     max_token_length = config.get('max_token_length', 20)
     validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', 10*batch_size)
     optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
-    optim_args = config.get('optim_args', {})
+    optim_args = config.get('optim_args', {'lr':1e-4})
     optim = optim_class(model.parameters(), **optim_args)
     should_stop = False
     def handler(signal, frame):
@@ -133,6 +154,8 @@ def train_model(config):
                 print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
             validate_record.append(scores)
+            print('Example validation pair:')
+            print('  Target: %s\n  Decoded: %s' % create_example_pair(model, validate_set, max_instance_length, max_token_length))
 
         batch = get_batch(train_set, vocab, batch_size, max_instance_length, max_token_length)
 
