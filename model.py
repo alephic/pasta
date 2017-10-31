@@ -83,7 +83,7 @@ class PastaEncoder(Model):
         self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.01)
         self.kl_weight = 0.0
         self.token_lstm_size = config.get('token_lstm_size', 256)
-        token_lstm_layers = config.get('token_lstm_layers', 2)
+        token_lstm_layers = config.get('token_lstm_layers', 4)
         self.token_lstm_dropout = config.get('token_lstm_dropout', 0.1)
         self.char_level = config.get('char_level', True)
         self.character_aware = config.get('character_aware', not self.char_level)
