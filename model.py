@@ -75,30 +75,32 @@ class PastaEncoder(Model):
         super(PastaEncoder, self).__init__(vocab)
         self.config = config
         word_emb_size = config.get('word_emb_size', 128)
-        self.input_word_dropout = config.get('input_word_dropout', 0.05)
+        self.input_word_dropout = config.get('input_word_dropout', 0.0)
         self.decode_word_dropout = config.get('decode_word_dropout', 0.0)
         self.decode_teacher_force_rate = config.get('decode_teacher_force_rate', 0.05)
         self.word_lstm_size = config.get('word_lstm_size', 256)
         word_lstm_layers = config.get('word_lstm_layers', 2)
         self.word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
-        char_emb_size = config.get('char_emb_size', 32)
-        char_cnn_filters = config.get('char_cnn_filters', 32)
+        self.char_aware = config.get('char_aware', False)
+        if self.char_aware:
+            char_emb_size = config.get('char_emb_size', 32)
+            char_cnn_filters = config.get('char_cnn_filters', 32)
+            self.char_emb = Embedding(
+                vocab.get_vocab_size(namespace='token_characters'),
+                char_emb_size,
+                padding_index=0
+            )
+            self.char_enc = CnnEncoder(
+                char_emb_size,
+                char_cnn_filters,
+                output_dim=word_emb_size
+            )
         latent_size = config.get('latent_size', 256)
         dist_mlp_hidden_size = config.get('dist_mlp_hidden_size', latent_size)
         self.word_emb = Embedding(
             vocab.get_vocab_size(namespace='tokens'),
             word_emb_size,
             padding_index=0
-        )
-        self.char_emb = Embedding(
-            vocab.get_vocab_size(namespace='token_characters'),
-            char_emb_size,
-            padding_index=0
-        )
-        self.char_enc = CnnEncoder(
-            char_emb_size,
-            char_cnn_filters,
-            output_dim=word_emb_size
         )
         self.word_enc = HighwayLSTMLayer(
             word_emb_size,
@@ -130,7 +132,7 @@ class PastaEncoder(Model):
         self.cuda()
 
     def do_input_word_dropout(self, token_indices_array):
-        if self.training:
+        if self.training and self.input_word_dropout > 0.0:
             token_mask = (token_indices_array != 0).astype(int)
             drop_mask = (np.random.rand(*token_indices_array.shape) < self.input_word_dropout).astype(int)
             return (token_indices_array * (1-drop_mask)) + token_mask*drop_mask
@@ -139,23 +141,19 @@ class PastaEncoder(Model):
     
     def embed_inputs(self, array_dict):
         tokens_array = self.do_input_word_dropout(array_dict['text']['tokens'])
-        tokens_array_flat = tokens_array.reshape(tokens_array.size)
-        chars_array = array_dict['text']['token_characters']
 
-        tokens_array_no_unks = (tokens_array_flat != 1).astype(int) * tokens_array_flat
-        embedded_flat = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array_no_unks), requires_grad=False))
+        embedded = self.word_emb(Variable(torch.cuda.LongTensor(tokens_array), requires_grad=False))
 
-        unk_indices = np.ma.array(np.arange(tokens_array.size), mask=tokens_array_flat != 1).compressed()
-        chars_flat = chars_array.reshape(chars_array.shape[0]*chars_array.shape[1], chars_array.shape[2])[unk_indices]
-        max_num_chars = (chars_flat != 0).astype(int).sum(axis=1).max()
-        chars_flat = chars_flat[:, :max_num_chars]
+        if self.char_aware:
+            chars_array = array_dict['text']['token_characters']
 
-        chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_flat), requires_grad=False))
-        chars_mask = Variable(torch.cuda.FloatTensor((chars_flat != 0).astype(float)), requires_grad=False)
-        chars_encoded = self.char_enc(chars_embedded, chars_mask)
+            chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array), requires_grad=False))
+            chars_mask = Variable(torch.cuda.FloatTensor((chars_array != 0).astype(float)), requires_grad=False)
+            chars_encoded = self.char_enc(chars_embedded, chars_mask)
 
-        embedded_flat[Variable(torch.cuda.LongTensor(unk_indices), requires_grad=False)] = chars_encoded
-        return embedded_flat.view(tokens_array.shape[0], tokens_array.shape[1], embedded_flat.size()[1]).contiguous()
+            embedded += chars_encoded
+
+        return embedded
 
     def get_latent_dist_params(self, inputs, input_lengths_var: Variable):
         sorted_inputs, sorted_lengths_var, unsort_indices = sort_batch_by_length(inputs, input_lengths_var)
