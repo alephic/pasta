@@ -81,7 +81,7 @@ class PastaEncoder(Model):
         self.word_lstm_size = config.get('word_lstm_size', 256)
         word_lstm_layers = config.get('word_lstm_layers', 2)
         self.word_lstm_dropout = config.get('word_lstm_dropout', 0.1)
-        self.char_aware = config.get('char_aware', False)
+        self.char_aware = config.get('char_aware', True)
         if self.char_aware:
             char_emb_size = config.get('char_emb_size', 32)
             char_cnn_filters = config.get('char_cnn_filters', 32)
@@ -90,11 +90,11 @@ class PastaEncoder(Model):
                 char_emb_size,
                 padding_index=0
             )
-            self.char_enc = CnnEncoder(
+            self.char_enc = TimeDistributed(CnnEncoder(
                 char_emb_size,
                 char_cnn_filters,
                 output_dim=word_emb_size
-            )
+            ))
         latent_size = config.get('latent_size', 256)
         dist_mlp_hidden_size = config.get('dist_mlp_hidden_size', latent_size)
         self.word_emb = Embedding(
@@ -147,7 +147,7 @@ class PastaEncoder(Model):
         if self.char_aware:
             chars_array = array_dict['text']['token_characters']
 
-            chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array), requires_grad=False))
+            chars_embedded = self.char_emb(Variable(torch.cuda.LongTensor(chars_array).contiguous(), requires_grad=False))
             chars_mask = Variable(torch.cuda.FloatTensor((chars_array != 0).astype(float)), requires_grad=False)
             chars_encoded = self.char_enc(chars_embedded, chars_mask)
 
