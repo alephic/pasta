@@ -11,9 +11,11 @@ from allennlp.data.tokenizers import WordTokenizer, CharacterTokenizer
 
 import torch
 
+import numpy as np
+
 from tqdm import tqdm
 
-from .model import PastaEncoder
+from .model import LanguageModel
 
 def ensure_path(path):
     directory = os.path.dirname(path)
@@ -52,27 +54,33 @@ def partition_dataset(dataset: Dataset, ratio: float):
     split_index = int(len(dataset.instances)*ratio)
     return Dataset(dataset.instances[:split_index]), Dataset(dataset.instances[split_index:])
 
-def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length, max_token_length):
+def get_batch(dataset, vocab, batch_size, max_instance_length):
+    instances_list = []
+    for i in range(batch_size):
+        instance_list = []
+        while len(instance_list) < max_instance_length:
+            remaining = max_instance_length - len(instance_list)
+            sampled = random.choice(dataset.instances)
+            instance_list.extend(vocab.get_token_index(t) for t in sampled.fields['text'].tokens[:remaining])
+        instances_list.append(instance_list)
+    return np.array(instances_list)
+
+def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
     model.eval()
     remaining = samples
     total_metrics = {metric: 0 for metric in metrics}
     while remaining > 0:
-        batch = get_batch(dataset, model.vocab, min(remaining, batch_size), max_instance_length, max_token_length)
+        curr_batch_size = min(remaining, batch_size)
+        batch = get_batch(dataset, model.vocab, curr_batch_size, max_instance_length)
         batch_out = model(batch)
         for metric in metrics:
             batch_metric = batch_out[metric]
             if isinstance(batch_metric, torch.autograd.Variable):
-                total_metrics[metric] += batch_metric.sum().data[0]
+                total_metrics[metric] += batch_metric.sum().data[0]*curr_batch_size
             else:
-                total_metrics[metric] += batch_metric
+                total_metrics[metric] += batch_metric*curr_batch_size
         remaining -= batch_size
     return {metric: total_score/samples for metric, total_score in total_metrics.items()}
-
-def create_example_pair(model, dataset, max_instance_length, max_token_length):
-    model.eval()
-    batch = get_batch(dataset, model.vocab, 1, max_instance_length, max_token_length)
-    batch_out = model(batch)
-    return (model.make_readable(batch_out['target_indices'])[0], model.make_readable(batch_out['decoded_indices'])[0])
 
 def train_model(config):
     word_level = config.get('word_level', False)
@@ -88,24 +96,16 @@ def train_model(config):
         print('Loading validation dataset:', validate_set)
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
-    if word_level:
-        max_vocab_size = {
-            'tokens': config.get('max_token_vocab_size', 40000),
-            'characters': config.get('max_character_vocab_size', 1000)
-        }
-    else:
-        max_vocab_size = {
-            'tokens': config.get('max_token_vocab_size', 4000),
-        }
+    max_vocab_size = {
+        'tokens': config.get('max_token_vocab_size', 4000 if word_level else 2000),
+    }
     vocab = Vocabulary.from_dataset(
         train_set,
         max_vocab_size=max_vocab_size
     )
-    print('Vocabulary has %d token entries' % vocab.get_vocab_size(namespace='tokens'))
-    if word_level:
-        print('Vocabulary has %d character entries' % vocab.get_vocab_size(namespace='characters'))
+    print('Vocabulary has %d token entries' % vocab.get_vocab_size())
     print('Initializing model')
-    model = PastaEncoder(vocab, config.get('model_config', {}))
+    model = LanguageModel(vocab, config.get('model_config', {}))
     step = 0
     validate_record = []
     batch_size = config.get('batch_size', 40)
@@ -113,7 +113,7 @@ def train_model(config):
     max_token_length = config.get('max_token_length', 20)
     validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
     validate_interval = config.get('validate_interval', 100)
-    validate_samples = config.get('validate_samples', 10*batch_size)
+    validate_samples = config.get('validate_samples', batch_size)
     optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
     optim_args = config.get('optim_args', {'lr':1e-4})
     optim = optim_class(model.parameters(), **optim_args)
@@ -128,13 +128,13 @@ def train_model(config):
         print('\rStep %d' % step, end='')
         if step % validate_interval == 0:
             print('\nValidation scores at step %d:' % step)
-            scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length, max_token_length)
+            scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length)
             for metric in validate_metrics:
                 print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
             validate_record.append(scores)
-            print('Example validation pair:')
-            print('  Target: %s\n  Decoded: %s' % create_example_pair(model, validate_set, max_instance_length, max_token_length))
+            print('Example pair:')
+            example_batch = get_batch(validate_set, model.vocab, 1, max_instance_length)
 
         batch = get_batch(train_set, vocab, batch_size, max_instance_length, max_token_length)
 

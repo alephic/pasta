@@ -108,10 +108,13 @@ class LanguageModel(Model):
       targets,
       Variable(torch.cuda.FloatTensor(*targets.size()).fill_(1), requires_grad=False)
     )
-    return {
+    output_dict = {
       'logits': all_logits,
       'indices': all_indices,
-      'text': [''.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)],
-      'loss': loss
+      'loss': loss,
+      'WER': (all_indices != targets).float().sum(1) / targets.size(1)
     }
-
+    if not self.training:
+      output_dict['text'] = [''.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
+      output_dict['target_text'] = [''.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]
+    return output_dict
