@@ -64,7 +64,7 @@ class LanguageModel(Model):
     lstm_size = config.get('lstm_size', 512)
     lstm_layers = config.get('lstm_layers', 4)
     self.emb = Embedding(
-      vocab.get_vocab_size()
+      vocab.get_vocab_size(),
       emb_size,
       padding_index=0
     )
