@@ -84,7 +84,7 @@ class LanguageModel(Model):
 
   def forward(self, input_array, unroll_length=200):
     input_var = Variable(torch.cuda.LongTensor(input_array), requires_grad=False, volatile=not self.training)
-    targets = input_var[:, 1:]
+    targets = input_var[:, 1:].contiguous()
     length = targets.size(1) if self.training else unroll_length
     batch_size = input_var.size(0)
     h = self.h0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
