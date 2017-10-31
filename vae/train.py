@@ -13,7 +13,7 @@ import torch
 
 from tqdm import tqdm
 
-from model import PastaEncoder
+from .model import PastaEncoder
 
 def ensure_path(path):
     directory = os.path.dirname(path)
