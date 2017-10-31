@@ -61,7 +61,11 @@ def get_batch(dataset, vocab, batch_size, max_instance_length):
         while len(instance_list) < max_instance_length:
             remaining = max_instance_length - len(instance_list)
             sampled = random.choice(dataset.instances)
-            instance_list.extend(vocab.get_token_index(t) for t in sampled.fields['text'].tokens[:remaining])
+            if len(instance_list) == 0:
+                offset = random.randint(0, max(0, len(sampled.fields['text'].tokens) - remaining))
+            else:
+                offset = 0
+            instance_list.extend(vocab.get_token_index(t) for t in sampled.fields['text'].tokens[offset: offset + remaining])
         instances_list.append(instance_list)
     return np.array(instances_list)
 
