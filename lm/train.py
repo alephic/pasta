@@ -30,7 +30,7 @@ OPTIM_CLASSES = {
     'adamax': torch.optim.Adamax
 }
 
-MODEL_SAVE_DIR = 'trained_models'
+MODEL_SAVE_DIR = 'trained_lm'
 
 def load_dataset(json_filename, word_level=True):
     with open(json_filename) as f:
@@ -164,7 +164,7 @@ def train_model(config):
         with open(path+ '.eval.json', mode='w') as f:
             json.dump(validate_record, f)
 
-def save_model(model: PastaEncoder, path):
+def save_model(model: LanguageModel, path):
     ensure_path(path)
     with open(path + '.model.conf.json', mode='w') as f:
         json.dump(model.config, f)
@@ -175,7 +175,7 @@ def load_model(path):
     v = Vocabulary.from_files(path + '.vocab')
     with open(path + '.model.conf.json') as f:
         config = json.load(f)
-    m = PastaEncoder(v, config)
+    m = LanguageModel(v, config)
     m.load_state_dict(torch.load(path + '.state.th'))
     return m
 
