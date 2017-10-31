@@ -94,7 +94,7 @@ class LanguageModel(Model):
     index_slices = []
     for t in range(length):
       embedded_inputs = self.emb(input_indices)
-      out, (h, c) = self.lstm(embedded_inputs, h, c)
+      out, (h, c) = self.lstm(embedded_inputs, (h, c))
       out = out[-1]
       logits = self.project(out)
       dist = torch.nn.functional.softmax(logits)
