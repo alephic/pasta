@@ -8,6 +8,7 @@ from allennlp.data.fields import TextField
 from allennlp.data import Dataset, Instance, Vocabulary
 from allennlp.data.token_indexers import SingleIdTokenIndexer
 from allennlp.data.tokenizers import WordTokenizer, CharacterTokenizer
+from allennlp.data.tokenizers.word_splitter import LettersDigitsWordSplitter
 
 import torch
 
@@ -36,7 +37,7 @@ def load_dataset(json_filename, word_level=True):
     with open(json_filename) as f:
         text_list = json.load(f)
     if word_level:
-        tokenizer = WordTokenizer(start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
+        tokenizer = WordTokenizer(word_splitter=LettersDigitsWordSplitter() ,start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
     else:
         tokenizer = CharacterTokenizer(start_tokens=['@@SOS@@'], end_tokens=['@@EOS@@'])
     indexers = {'tokens': SingleIdTokenIndexer()}
@@ -91,7 +92,7 @@ def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_
     return {metric: total_score/samples for metric, total_score in total_metrics.items()}
 
 def train_model(config):
-    word_level = config.get('word_level', False)
+    word_level = config.get('word_level', True)
     train_set_path = config.get('train_set_path', 'data/emojipasta_utf8_filtered.json')
     print('Loading training dataset:', train_set_path)
     train_set = load_dataset(train_set_path, word_level=word_level)
@@ -105,7 +106,7 @@ def train_model(config):
         validate_set = load_dataset(validate_set_path)
     print('Generating vocabulary')
     max_vocab_size = {
-        'tokens': config.get('max_token_vocab_size', 4000 if word_level else 2000),
+        'tokens': config.get('max_token_vocab_size', 40000 if word_level else 2000),
     }
     vocab = Vocabulary.from_dataset(
         train_set,
@@ -113,11 +114,11 @@ def train_model(config):
     )
     print('Vocabulary has %d token entries' % vocab.get_vocab_size())
     print('Initializing model')
-    model = LanguageModel(vocab, config.get('model_config', {}))
+    model = LanguageModel(vocab, config.get('model_config', {'word_level': word_level}))
     step = 0
     validate_record = []
-    batch_size = config.get('batch_size', 128)
-    max_instance_length = config.get('max_instance_length', 60)
+    batch_size = config.get('batch_size', 40)
+    max_instance_length = config.get('max_instance_length', 40)
     validate_metrics = config.get('validate_metrics', ['loss', 'accuracy'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', batch_size)

@@ -65,6 +65,7 @@ class LanguageModel(Model):
   def __init__(self, vocab, config=None):
     super().__init__(vocab)
     config = config or {}
+    self.config = config
     emb_size = config.get('emb_size', 256)
     lstm_size = config.get('lstm_size', 512)
     lstm_layers = config.get('lstm_layers', 4)
@@ -130,6 +131,7 @@ class LanguageModel(Model):
       output_dict['loss'] = loss
       output_dict['accuracy'] = (all_indices == targets).float().sum(1) / targets.size(1)
     if not self.training:
-      output_dict['text'] = [''.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
-      output_dict['target_text'] = [''.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]
+      sep = ' ' if self.config.get('word_level', True) else ''
+      output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
+      output_dict['target_text'] = [sep.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]
     return output_dict

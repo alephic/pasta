@@ -4,4 +4,5 @@ data/*.json
 highway_lstm/_ext
 highway_lstm/src/*.o
 trained_models/
+trained_lm/
 .vscode/
