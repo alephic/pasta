@@ -84,7 +84,7 @@ def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_
         for metric in metrics:
             batch_metric = batch_out[metric]
             if isinstance(batch_metric, torch.autograd.Variable):
-                total_metrics[metric] += batch_metric.sum().data[0]*curr_batch_size
+                total_metrics[metric] += batch_metric.data[0] * curr_batch_size if batch_metric.nelement() == 1 else batch_metric.data.sum()
             else:
                 total_metrics[metric] += batch_metric*curr_batch_size
         remaining -= batch_size
@@ -117,15 +117,16 @@ def train_model(config):
     step = 0
     validate_record = []
     batch_size = config.get('batch_size', 128)
-    max_instance_length = config.get('max_instance_length', 100
-    max_token_length = config.get('max_token_length', 20)
+    max_instance_length = config.get('max_instance_length', 60)
     validate_metrics = config.get('validate_metrics', ['loss', 'accuracy'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', batch_size)
     optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
-    optim_args = config.get('optim_args', {'lr':1e-2})
+    optim_args = config.get('optim_args', {'lr':1e-4})
     optim = optim_class(model.parameters(), **optim_args)
     should_stop = False
+    prev_accuracy = 0
+    prev_loss = float('inf')
     def handler(signal, frame):
         nonlocal should_stop
         print("Stopping training at step", step)
@@ -133,7 +134,7 @@ def train_model(config):
     signal.signal(signal.SIGINT, handler)
     print('Starting training')
     while not should_stop:
-        print('\rStep %d' % step, end='')
+        print('\rStep %d, loss = %f' % (step, prev_loss), end='')
         if step % validate_interval == 0:
             print('\nValidation scores at step %d:' % step)
             scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length)
@@ -141,10 +142,10 @@ def train_model(config):
                 print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
             validate_record.append(scores)
-            print('Example pair:')
+            print('Example train pair:')
             if model.training:
                 model.eval()
-            example_batch = model(get_batch(validate_set, model.vocab, 1, max_instance_length), teacher_forcing=1)
+            example_batch = model(get_batch(train_set, model.vocab, 1, max_instance_length), teacher_forcing=1.0 - prev_accuracy)
             print('  Target:', example_batch['target_text'][0])
             print('  Decoded:', example_batch['text'][0])
 
@@ -154,8 +155,10 @@ def train_model(config):
 
         if not model.training:
             model.train()
-        batch_out = model(batch, teacher_forcing=1)
+        batch_out = model(batch, teacher_forcing=1.0 - prev_accuracy)
+        prev_accuracy = batch_out['accuracy'].data.sum() / batch_size
         loss = batch_out['loss']
+        prev_loss = loss.data[0]
         loss.backward()
 
         optim.step()
