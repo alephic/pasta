@@ -56,6 +56,11 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
     # shape : (batch_size,)
     per_batch_loss = negative_log_likelihood.sum(1) / (weights.sum(1).float() + 1e-13)
 
+    if batch_average:
+        num_non_empty_sequences = ((weights.sum(1) > 0).float().sum() + 1e-13)
+        return per_batch_loss.sum() / num_non_empty_sequences
+    return per_batch_loss
+
 class LanguageModel(Model):
   def __init__(self, vocab, config=None):
     super().__init__(vocab)
@@ -74,46 +79,56 @@ class LanguageModel(Model):
       lstm_layers,
       batch_first=True
     )
-    self.h0 = torch.nn.Parameter(torch.Tensor(lstm_layers, lstm_size))
-    self.c0 = torch.nn.Parameter(torch.Tensor(lstm_layers, lstm_size))
+    self.h0 = torch.nn.Parameter(torch.Tensor(lstm_layers, lstm_size).zero_())
+    self.c0 = torch.nn.Parameter(torch.Tensor(lstm_layers, lstm_size).zero_())
     self.project = torch.nn.Linear(
       lstm_size,
       vocab.get_vocab_size()
     )
     self.cuda()
 
-  def forward(self, input_array, unroll_length=200):
+  def forward(self, input_array, unroll_length=None, teacher_forcing=0):
     input_var = Variable(torch.cuda.LongTensor(input_array), requires_grad=False, volatile=not self.training)
     targets = input_var[:, 1:].contiguous()
-    length = targets.size(1) if self.training else unroll_length
+    length = unroll_length or targets.size(1)
     batch_size = input_var.size(0)
     h = self.h0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
     c = self.c0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
-    input_indices = input_var[:, :1]
+    input_indices = input_var[:, :1].contiguous()
     logit_slices = []
     index_slices = []
     for t in range(length):
       embedded_inputs = self.emb(input_indices)
       out, (h, c) = self.lstm(embedded_inputs, (h, c))
-      out = out[-1]
+      out = out[:, -1]
       logits = self.project(out)
-      dist = torch.nn.functional.softmax(logits)
-      indices = torch.multinomial(dist, 1, replacement=True)
+      dist = torch.nn.functional.softmax(logits, dim=1)
+      indices = torch.multinomial(dist, 1, replacement=True).detach()
       logit_slices.append(logits)
       index_slices.append(indices)
+      input_indices = indices
+
+      # Teacher forcing
+      if teacher_forcing > 0:
+          input_force_mask = torch.cuda.LongTensor(batch_size, 1)
+          input_force_mask.bernoulli_(teacher_forcing)
+          input_force_mask = Variable(input_force_mask, requires_grad=False)
+          gold_indices = targets[:, t].unsqueeze(1)
+          input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
     all_logits = torch.stack(logit_slices, 1)
     all_indices = torch.cat(index_slices, 1)
-    loss = sequence_cross_entropy_with_logits(
-      all_logits,
-      targets,
-      Variable(torch.cuda.FloatTensor(*targets.size()).fill_(1), requires_grad=False)
-    )
     output_dict = {
       'logits': all_logits,
-      'indices': all_indices,
-      'loss': loss,
-      'WER': (all_indices != targets).float().sum(1) / targets.size(1)
+      'indices': all_indices
     }
+    if length == targets.size(1):
+      loss = sequence_cross_entropy_with_logits(
+        all_logits,
+        targets.contiguous(),
+        Variable(torch.cuda.FloatTensor(*targets.size()).fill_(1), requires_grad=False)
+      )
+      output_dict['loss'] = loss
+      output_dict['accuracy'] = (all_indices == targets).float().sum(1) / targets.size(1)
     if not self.training:
       output_dict['text'] = [''.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
       output_dict['target_text'] = [''.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]

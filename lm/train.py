@@ -56,6 +56,7 @@ def partition_dataset(dataset: Dataset, ratio: float):
 
 def get_batch(dataset, vocab, batch_size, max_instance_length):
     instances_list = []
+    indexers = {'tokens': SingleIdTokenIndexer()}
     for i in range(batch_size):
         instance_list = []
         while len(instance_list) < max_instance_length:
@@ -65,9 +66,12 @@ def get_batch(dataset, vocab, batch_size, max_instance_length):
                 offset = random.randint(0, max(0, len(sampled.fields['text'].tokens) - remaining))
             else:
                 offset = 0
-            instance_list.extend(vocab.get_token_index(t) for t in sampled.fields['text'].tokens[offset: offset + remaining])
-        instances_list.append(instance_list)
-    return np.array(instances_list)
+            instance_list.extend(sampled.fields['text'].tokens[offset: offset + remaining])
+        instance = Instance({'text': TextField(instance_list, token_indexers=indexers)})
+        instance.index_fields(vocab)
+        instances_list.append(instance)
+    d = Dataset(instances_list)
+    return d.as_array_dict(verbose=False)['text']['tokens']
 
 def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
     model.eval()
@@ -112,14 +116,14 @@ def train_model(config):
     model = LanguageModel(vocab, config.get('model_config', {}))
     step = 0
     validate_record = []
-    batch_size = config.get('batch_size', 40)
-    max_instance_length = config.get('max_instance_length', 100)
+    batch_size = config.get('batch_size', 128)
+    max_instance_length = config.get('max_instance_length', 100
     max_token_length = config.get('max_token_length', 20)
-    validate_metrics = config.get('validate_metrics', ['accuracy', 'loss'])
+    validate_metrics = config.get('validate_metrics', ['loss', 'accuracy'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', batch_size)
     optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
-    optim_args = config.get('optim_args', {'lr':1e-4})
+    optim_args = config.get('optim_args', {'lr':1e-2})
     optim = optim_class(model.parameters(), **optim_args)
     should_stop = False
     def handler(signal, frame):
@@ -138,15 +142,19 @@ def train_model(config):
             scores['step'] = step
             validate_record.append(scores)
             print('Example pair:')
-            example_batch = get_batch(validate_set, model.vocab, 1, max_instance_length)
+            if model.training:
+                model.eval()
+            example_batch = model(get_batch(validate_set, model.vocab, 1, max_instance_length), teacher_forcing=1)
+            print('  Target:', example_batch['target_text'][0])
+            print('  Decoded:', example_batch['text'][0])
 
-        batch = get_batch(train_set, vocab, batch_size, max_instance_length, max_token_length)
+        batch = get_batch(train_set, vocab, batch_size, max_instance_length)
 
         optim.zero_grad()
 
         if not model.training:
             model.train()
-        batch_out = model(batch)
+        batch_out = model(batch, teacher_forcing=1)
         loss = batch_out['loss']
         loss.backward()
 
