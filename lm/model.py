@@ -90,39 +90,52 @@ class LanguageModel(Model):
 
   def forward(self, input_array, unroll_length=None, teacher_forcing=0):
     input_var = Variable(torch.cuda.LongTensor(input_array), requires_grad=False, volatile=not self.training)
-    targets = input_var[:, 1:].contiguous()
-    length = unroll_length or targets.size(1)
+    if input_var.size(1) > 1:
+      targets = input_var[:, 1:].contiguous()
+      length = targets.size(1)
+    else:
+      targets = None
+      length = unroll_length
     batch_size = input_var.size(0)
     h = self.h0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
     c = self.c0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
-    input_indices = input_var[:, :1].contiguous()
-    logit_slices = []
-    index_slices = []
-    for t in range(length):
-      embedded_inputs = self.emb(input_indices)
-      out, (h, c) = self.lstm(embedded_inputs, (h, c))
-      out = out[:, -1]
-      logits = self.project(out)
-      dist = torch.nn.functional.softmax(logits, dim=1)
-      indices = torch.multinomial(dist, 1, replacement=True).detach()
-      logit_slices.append(logits)
-      index_slices.append(indices)
-      input_indices = indices
+    if teacher_forcing < 1.0 or targets is None:
+      # Need to forward each timestep's output to the next timestep's input
+      input_indices = input_var[:, :1].contiguous()
+      logit_slices = []
+      index_slices = []
+      for t in range(length):
+        embedded_inputs = self.emb(input_indices)
+        out, (h, c) = self.lstm(embedded_inputs, (h, c))
+        out = out[:, -1]
+        logits = self.project(out)
+        dist = torch.nn.functional.softmax(logits, dim=1)
+        indices = torch.multinomial(dist, 1, replacement=True).detach()
+        logit_slices.append(logits)
+        index_slices.append(indices)
+        input_indices = indices
 
-      # Teacher forcing
-      if teacher_forcing > 0:
-          input_force_mask = torch.cuda.LongTensor(batch_size, 1)
-          input_force_mask.bernoulli_(teacher_forcing)
-          input_force_mask = Variable(input_force_mask, requires_grad=False)
-          gold_indices = targets[:, t].unsqueeze(1)
-          input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
-    all_logits = torch.stack(logit_slices, 1)
-    all_indices = torch.cat(index_slices, 1)
+        # Teacher forcing
+        if teacher_forcing > 0 and targets is not None:
+            input_force_mask = torch.cuda.LongTensor(batch_size, 1)
+            input_force_mask.bernoulli_(teacher_forcing)
+            input_force_mask = Variable(input_force_mask, requires_grad=False)
+            gold_indices = targets[:, t].unsqueeze(1)
+            input_indices = (input_indices * (1 - input_force_mask)) + (input_force_mask * gold_indices)
+      all_logits = torch.stack(logit_slices, 1)
+      all_indices = torch.cat(index_slices, 1)
+    else:
+      # Don't need to forward output to input
+      embedded_inputs = self.emb(input_var[:, :-1])
+      out, _ = self.lstm(embedded_inputs, (h, c))
+      all_logits = self.project(out.contiguous().view(batch_size * length, out.size(2))).view(batch_size, length, self.project.out_features)
+      dist = torch.nn.functional.softmax(all_logits, dim=2)
+      all_indices = torch.multinomial(dist.view(batch_size * length, dist.size(2)), 1, replacement=True).view(batch_size, length).detach()
     output_dict = {
       'logits': all_logits,
       'indices': all_indices
     }
-    if length == targets.size(1):
+    if targets is not None:
       loss = sequence_cross_entropy_with_logits(
         all_logits,
         targets.contiguous(),
@@ -130,8 +143,7 @@ class LanguageModel(Model):
       )
       output_dict['loss'] = loss
       output_dict['accuracy'] = (all_indices == targets).float().sum(1) / targets.size(1)
-    if not self.training:
+    else:
       sep = ' ' if self.config.get('word_level', True) else ''
       output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
-      output_dict['target_text'] = [sep.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]
     return output_dict

@@ -127,6 +127,7 @@ def train_model(config):
     optim = optim_class(model.parameters(), **optim_args)
     should_stop = False
     prev_accuracy = 0
+    teacher_forcing = 1.0
     prev_loss = float('inf')
     def handler(signal, frame):
         nonlocal should_stop
@@ -143,12 +144,10 @@ def train_model(config):
                 print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
             validate_record.append(scores)
-            print('Example train pair:')
             if model.training:
                 model.eval()
-            example_batch = model(get_batch(train_set, model.vocab, 1, max_instance_length), teacher_forcing=1.0 - prev_accuracy)
-            print('  Target:', example_batch['target_text'][0])
-            print('  Decoded:', example_batch['text'][0])
+            example_batch = model(np.array([[vocab.get_token_index('@@SOS@@')]]), unroll_length=max_instance_length)
+            print('  Sample:', example_batch['text'][0])
 
         batch = get_batch(train_set, vocab, batch_size, max_instance_length)
 
@@ -156,8 +155,9 @@ def train_model(config):
 
         if not model.training:
             model.train()
-        batch_out = model(batch, teacher_forcing=1.0 - prev_accuracy)
+        batch_out = model(batch, teacher_forcing=teacher_forcing)
         prev_accuracy = batch_out['accuracy'].data.sum() / batch_size
+        teacher_forcing = 1.0 - prev_accuracy if prev_accuracy > 0.1 else 1.0
         loss = batch_out['loss']
         prev_loss = loss.data[0]
         loss.backward()
