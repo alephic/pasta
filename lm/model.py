@@ -88,7 +88,7 @@ class LanguageModel(Model):
     )
     self.cuda()
 
-  def forward(self, input_array, unroll_length=None, teacher_forcing=0):
+  def forward(self, input_array, init_states=None, unroll_length=None, teacher_forcing=0):
     input_var = Variable(torch.cuda.LongTensor(input_array), requires_grad=False, volatile=not self.training)
     if input_var.size(1) > 1:
       targets = input_var[:, 1:].contiguous()
@@ -97,8 +97,15 @@ class LanguageModel(Model):
       targets = None
       length = unroll_length
     batch_size = input_var.size(0)
-    h = self.h0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
-    c = self.c0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
+    if init_states is None:
+      h = self.h0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
+      c = self.c0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
+    else:
+      h, c = init_states
+      reset_mask = (input_var[:, 0] == self.vocab.get_token_index('@@SOS@@')).float()
+      reset_mask = reset_mask.view(1, batch_size, 1).expand(h.size(0), -1, h.size(2))
+      h = h*(1.0 - reset_mask) + self.h0.unsqueeze(1).expand(-1, batch_size, -1)*reset_mask
+      c = c*(1.0 - reset_mask) + self.c0.unsqueeze(1).expand(-1, batch_size, -1)*reset_mask
     if teacher_forcing < 1.0 or targets is None:
       # Need to forward each timestep's output to the next timestep's input
       input_indices = input_var[:, :1].contiguous()
@@ -127,22 +134,24 @@ class LanguageModel(Model):
     else:
       # Don't need to forward output to input
       embedded_inputs = self.emb(input_var[:, :-1])
-      out, _ = self.lstm(embedded_inputs, (h, c))
+      out, (h, c) = self.lstm(embedded_inputs, (h, c))
       all_logits = self.project(out.contiguous().view(batch_size * length, out.size(2))).view(batch_size, length, self.project.out_features)
       dist = torch.nn.functional.softmax(all_logits, dim=2)
       all_indices = torch.multinomial(dist.view(batch_size * length, dist.size(2)), 1, replacement=True).view(batch_size, length).detach()
     output_dict = {
       'logits': all_logits,
-      'indices': all_indices
+      'indices': all_indices,
+      'final_state': (h.detach(), c.detach())
     }
     if targets is not None:
+      target_mask = (targets != 0).float()
       loss = sequence_cross_entropy_with_logits(
         all_logits,
         targets.contiguous(),
-        Variable(torch.cuda.FloatTensor(*targets.size()).fill_(1), requires_grad=False)
+        target_mask
       )
       output_dict['loss'] = loss
-      output_dict['accuracy'] = (all_indices == targets).float().sum(1) / targets.size(1)
+      output_dict['accuracy'] = ((all_indices == targets).float() * target_mask).sum(1) / target_mask.sum(1)
     else:
       sep = ' ' if self.config.get('word_level', True) else ''
       output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]

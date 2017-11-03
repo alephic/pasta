@@ -55,33 +55,50 @@ def partition_dataset(dataset: Dataset, ratio: float):
     split_index = int(len(dataset.instances)*ratio)
     return Dataset(dataset.instances[:split_index]), Dataset(dataset.instances[split_index:])
 
-def get_batch(dataset, vocab, batch_size, max_instance_length):
-    instances_list = []
-    indexers = {'tokens': SingleIdTokenIndexer()}
-    for i in range(batch_size):
-        instance_list = []
-        while len(instance_list) < max_instance_length:
-            remaining = max_instance_length - len(instance_list)
-            sampled = random.choice(dataset.instances)
-            if len(instance_list) == 0:
-                offset = random.randint(0, max(0, len(sampled.fields['text'].tokens) - remaining))
-            else:
-                offset = 0
-            instance_list.extend(sampled.fields['text'].tokens[offset: offset + remaining])
-        instance = Instance({'text': TextField(instance_list, token_indexers=indexers)})
-        instance.index_fields(vocab)
-        instances_list.append(instance)
-    d = Dataset(instances_list)
-    return d.as_array_dict(verbose=False)['text']['tokens']
+def infinite_shuffled_generator(dataset):
+    order = list(range(len(dataset)))
+    while True:
+        random.shuffle(order)
+        for i in order:
+            yield dataset.instances[i]
 
-def evaluate_metrics(model, dataset, metrics, samples, batch_size, max_instance_length):
+def single_pass_generator(dataset):
+    return iter(dataset.instances)
+
+def lm_batch_generator(dataset_gen, vocab, batch_size, max_instance_length):
+    indexers = {'tokens': SingleIdTokenIndexer()}
+    source_instances = [next(dataset_gen) for i in range(batch_size)]
+    source_offsets = [0 for i in range(batch_size)]
+    active_slots = set(range(batch_size))
+    padding_index = vocab.get_token_index(vocab._padding_token)
+    while len(active_slots) > 0:
+        rows = []
+        for i in range(batch_size):
+            if i in active_slots:
+                source_instance = source_instances[i]
+                source_offset = source_offsets[i]
+                row = list(map(vocab.get_token_index, source_instance.fields['text'].tokens[source_offset:source_offset + max_instance_length]))
+                row.extend([padding_index] * (max_instance_length - len(row)))
+                rows.append(row)
+                new_offset = source_offset + max_instance_length
+                if new_offset >= len(source_instance.fields['text'].tokens):
+                    source_instances[i] = next(dataset_gen, None)
+                    source_offsets[i] = 0
+                    if source_instances[i] is None:
+                        active_slots.remove(i)
+            else:
+                rows.append([padding_index] * max_instance_length)
+        yield np.array(rows)
+
+def evaluate_metrics(model, dataset, metrics, batch_size, max_instance_length):
     model.eval()
-    remaining = samples
+    gen = single_pass_generator(dataset)
     total_metrics = {metric: 0 for metric in metrics}
-    while remaining > 0:
-        curr_batch_size = min(remaining, batch_size)
-        batch = get_batch(dataset, model.vocab, curr_batch_size, max_instance_length)
-        batch_out = model(batch)
+    state = None
+    for batch in lm_batch_generator(gen, model.vocab, batch_size, max_instance_length):
+        curr_batch_size = batch.shape[0]
+        batch_out = model(batch, init_state=state, teacher_forcing=1.0)
+        state = batch_out['final_state']
         for metric in metrics:
             batch_metric = batch_out[metric]
             if isinstance(batch_metric, torch.autograd.Variable):
@@ -98,7 +115,7 @@ def train_model(config):
     train_set = load_dataset(train_set_path, word_level=word_level)
     validate_set_path = config.get('validate_set_path', None)
     if validate_set_path is None:
-        train_set, validate_set = partition_dataset(train_set, config.get('train_partition', 0.9))
+        train_set, validate_set = partition_dataset(train_set, config.get('train_partition', 0.95))
         print('Created train partition with %d examples' % len(train_set.instances))
         print('Created validation partition with %d examples' % len(validate_set.instances))
     else:
@@ -135,11 +152,13 @@ def train_model(config):
         should_stop = True
     signal.signal(signal.SIGINT, handler)
     print('Starting training')
+    state = None
+    batch_gen = lm_batch_generator(infinite_shuffled_generator(train_set), vocab, batch_size, max_instance_length) 
     while not should_stop:
         print('\rStep %d, loss = %f' % (step, prev_loss), end='')
         if step % validate_interval == 0:
             print('\nValidation scores at step %d:' % step)
-            scores = evaluate_metrics(model, validate_set, validate_metrics, validate_samples, batch_size, max_instance_length)
+            scores = evaluate_metrics(model, validate_set, validate_metrics, batch_size, max_instance_length)
             for metric in validate_metrics:
                 print('  %s: %f' % (metric, scores[metric]))
             scores['step'] = step
@@ -149,13 +168,14 @@ def train_model(config):
             example_batch = model(np.array([[vocab.get_token_index('@@SOS@@')]]), unroll_length=max_instance_length)
             print('  Sample:', example_batch['text'][0])
 
-        batch = get_batch(train_set, vocab, batch_size, max_instance_length)
+        batch = next(batch_gen)
 
         optim.zero_grad()
 
         if not model.training:
             model.train()
-        batch_out = model(batch, teacher_forcing=teacher_forcing)
+        batch_out = model(batch, init_state=state, teacher_forcing=teacher_forcing)
+        state = batch_out['final_state']
         prev_accuracy = batch_out['accuracy'].data.sum() / batch_size
         teacher_forcing = 1.0 - prev_accuracy if prev_accuracy > 0.1 else 1.0
         loss = batch_out['loss']
