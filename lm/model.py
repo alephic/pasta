@@ -69,6 +69,7 @@ class LanguageModel(Model):
     emb_size = config.get('emb_size', 256)
     lstm_size = config.get('lstm_size', 512)
     lstm_layers = config.get('lstm_layers', 4)
+    self.word_dropout = config.get('word_dropout', 0.05)
     self.emb = Embedding(
       vocab.get_vocab_size(),
       emb_size,
@@ -78,6 +79,7 @@ class LanguageModel(Model):
       emb_size,
       lstm_size,
       lstm_layers,
+      dropout=config.get('lstm_interlayer_dropout', 0.1),
       batch_first=True
     )
     self.h0 = torch.nn.Parameter(torch.Tensor(lstm_layers, lstm_size).zero_())
@@ -112,6 +114,13 @@ class LanguageModel(Model):
       logit_slices = []
       index_slices = []
       for t in range(length):
+        # Word dropout
+        if self.word_dropout > 0:
+            input_drop_mask = torch.cuda.LongTensor(batch_size, 1)
+            input_drop_mask.bernoulli_(self.word_dropout)
+            input_drop_mask = Variable(input_drop_mask, requires_grad=False)
+            input_indices = (input_indices * (1 - input_drop_mask)) + input_drop_mask
+
         embedded_inputs = self.emb(input_indices)
         out, (h, c) = self.lstm(embedded_inputs, (h, c))
         out = out[:, -1]
@@ -133,11 +142,19 @@ class LanguageModel(Model):
       all_indices = torch.cat(index_slices, 1)
     else:
       # Don't need to forward output to input
+      # Word dropout
+      if self.word_dropout > 0:
+          input_drop_mask = torch.cuda.LongTensor(batch_size, input_var.size(1))
+          input_drop_mask.bernoulli_(self.word_dropout)
+          input_drop_mask = Variable(input_drop_mask, requires_grad=False)
+          input_var = (input_var * (1 - input_drop_mask)) + input_drop_mask
+
       embedded_inputs = self.emb(input_var[:, :-1])
       out, (h, c) = self.lstm(embedded_inputs, (h, c))
       all_logits = self.project(out.contiguous().view(batch_size * length, out.size(2))).view(batch_size, length, self.project.out_features)
       dist = torch.nn.functional.softmax(all_logits, dim=2)
       all_indices = torch.multinomial(dist.view(batch_size * length, dist.size(2)), 1, replacement=True).view(batch_size, length).detach()
+
     output_dict = {
       'logits': all_logits,
       'indices': all_indices,
@@ -151,7 +168,10 @@ class LanguageModel(Model):
         target_mask
       )
       output_dict['loss'] = loss
-      output_dict['accuracy'] = ((all_indices == targets).float() * target_mask).sum(1) / target_mask.sum(1)
+      output_dict['accuracy'] = ((all_indices == targets).float() * target_mask).sum(1) / torch.min(target_mask.sum(1), Variable(torch.cuda.FloatTensor(batch_size).fill_(1), requires_grad=False))
+      sep = ' ' if self.config.get('word_level', True) else ''
+      output_dict['target_text'] = [sep.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]
+      output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
     else:
       sep = ' ' if self.config.get('word_level', True) else ''
       output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
