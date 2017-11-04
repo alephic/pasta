@@ -169,9 +169,6 @@ class LanguageModel(Model):
       )
       output_dict['loss'] = loss
       output_dict['accuracy'] = ((all_indices == targets).float() * target_mask).sum(1) / torch.min(target_mask.sum(1), Variable(torch.cuda.FloatTensor(batch_size).fill_(1), requires_grad=False))
-      sep = ' ' if self.config.get('word_level', True) else ''
-      output_dict['target_text'] = [sep.join(self.vocab.get_token_from_index(i) for i in targets.data[j].tolist()) for j in range(batch_size)]
-      output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]
     else:
       sep = ' ' if self.config.get('word_level', True) else ''
       output_dict['text'] = [sep.join(self.vocab.get_token_from_index(i) for i in all_indices.data[j].tolist()) for j in range(batch_size)]

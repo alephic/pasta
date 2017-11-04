@@ -28,7 +28,8 @@ OPTIM_CLASSES = {
     'adam': torch.optim.Adam,
     'adagrad': torch.optim.Adagrad,
     'adadelta': torch.optim.Adadelta,
-    'adamax': torch.optim.Adamax
+    'adamax': torch.optim.Adamax,
+    'rmsprop': torch.optim.RMSprop
 }
 
 MODEL_SAVE_DIR = 'trained_lm'
@@ -108,7 +109,7 @@ def evaluate_metrics(model, dataset, metrics, batch_size, max_instance_length):
 
 def train_model(config):
     word_level = config.get('word_level', True)
-    train_set_path = config.get('train_set_path', 'data/emojipasta_utf8_filtered.json')
+    train_set_path = config.get('train_set_path', 'data/all_pasta_utf8_filtered.json')
     print('Loading training dataset:', train_set_path)
     train_set = load_dataset(train_set_path, word_level=word_level)
     validate_set_path = config.get('validate_set_path', None)
@@ -133,14 +134,14 @@ def train_model(config):
     step = 0
     validate_record = []
     batch_size = config.get('batch_size', 40)
-    max_instance_length = config.get('max_instance_length', 40)
+    max_instance_length = config.get('max_instance_length', 60)
     validate_metrics = config.get('validate_metrics', ['loss', 'accuracy'])
     validate_interval = config.get('validate_interval', 100)
     validate_samples = config.get('validate_samples', batch_size)
-    optim_class = OPTIM_CLASSES[config.get('optim_class', 'adagrad')]
-    optim_args = config.get('optim_args', {'lr':1e-2})
+    optim_class = OPTIM_CLASSES[config.get('optim_class', 'adam')]
+    optim_args = config.get('optim_args', {'lr':1e-3})
     optim = optim_class(model.parameters(), **optim_args)
-    grad_clip = config.get('grad_clip', 0.25)
+    grad_clipping_magnitude = config.get('grad_clipping_magnitude', 1)
     should_stop = False
     prev_accuracy = 0
     teacher_forcing = 1.0
@@ -168,14 +169,13 @@ def train_model(config):
         if not model.training:
             model.train()
         batch_out = model(batch, init_states=state, teacher_forcing=teacher_forcing)
-        print(batch_out['text'][0])
         state = batch_out['final_state']
         prev_accuracy = batch_out['accuracy'].data.sum() / batch_size
         #teacher_forcing = 1.0 - prev_accuracy if prev_accuracy > 0.5 else 1.0
         loss = batch_out['loss']
         prev_loss = loss.data[0]
         loss.backward()
-        torch.nn.utils.clip_grad_norm(model.parameters(), grad_clip)
+        torch.nn.utils.clip_grad_norm(model.parameters(), grad_clipping_magnitude)
 
         optim.step()
 
