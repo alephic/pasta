@@ -105,14 +105,14 @@ class LanguageModel(Model):
       length = unroll_length
     batch_size = input_var.size(0)
     if init_states is None:
-      h = self.h0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
-      c = self.c0.unsqueeze(1).expand(-1, batch_size, -1).contiguous()
+      h = self.h0.unsqueeze(1).expand(self.h0.size(0), batch_size, self.h0.size(1)).contiguous()
+      c = self.c0.unsqueeze(1).expand(self.c0.size(0), batch_size, self.c0.size(1)).contiguous()
     else:
       h, c = init_states
       reset_mask = (input_var[:, 0] == self.vocab.get_token_index('@@SOS@@')).float()
-      reset_mask = reset_mask.view(1, batch_size, 1).expand(h.size(0), -1, h.size(2))
-      h = h*(1.0 - reset_mask) + self.h0.unsqueeze(1).expand(-1, batch_size, -1)*reset_mask
-      c = c*(1.0 - reset_mask) + self.c0.unsqueeze(1).expand(-1, batch_size, -1)*reset_mask
+      reset_mask = reset_mask.view(1, batch_size, 1).expand(h.size(0), batch_size, h.size(2))
+      h = h*(1.0 - reset_mask) + self.h0.unsqueeze(1).expand(self.h0.size(0), batch_size, self.h0.size(1))*reset_mask
+      c = c*(1.0 - reset_mask) + self.c0.unsqueeze(1).expand(self.c0.size(0), batch_size, self.c0.size(1))*reset_mask
     if teacher_forcing < 1.0 or targets is None:
       # Need to forward each timestep's output to the next timestep's input
       input_indices = input_var[:, :1].contiguous()
