@@ -6,3 +6,10 @@ highway_lstm/src/*.o
 trained_models/
 trained_lm/
 .vscode/
+bin/
+lib/
+man/
+lib64
+share/
+pip-selfcheck.json
+pyvenv.cfg
