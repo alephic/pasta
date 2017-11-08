@@ -131,6 +131,7 @@ def train_model(config):
     print('Vocabulary has %d token entries' % vocab.get_vocab_size())
     print('Initializing model')
     model = LanguageModel(vocab, config.get('model_config', {'word_level': word_level}))
+    model.cuda()
     step = 0
     validate_record = []
     batch_size = config.get('batch_size', 40)
