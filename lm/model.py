@@ -6,7 +6,6 @@ from allennlp.modules.token_embedders.embedding import Embedding
 from allennlp.models.model import Model
 
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, PackedSequence
-from highway_lstm.highway_lstm_layer import HighwayLSTMLayer
 
 def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
                                        targets: torch.LongTensor,
