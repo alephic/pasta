@@ -1,4 +1,5 @@
 from .train import load_model
+from allennlp.data.tokenizers.word_splitter import LettersDigitsWordSplitter
 import numpy as np
 import re
 import discord
@@ -45,6 +46,36 @@ def get_pasta(model):
             else:
                 text += new_text
     return cleanup(text)
+
+def get_pasta_with_prompt(model, prompt_text):
+    tokens = LettersDigitsWordSplitter().split_words(prompt_text)
+    inp = np.array([[model.vocab.get_token_index('@@SOS@@')] + [model.vocab.get_token_index(t.text) for t in tokens]])
+    batch_out = model(inp)
+    state = batch_out['final_state']
+    last_inp = inp[:, -1:]
+    batch_out = model(last_inp, init_states=state, disallow_unk=True, unroll_length=100)
+    text = batch_out['text'][0]
+    state = batch_out['final_state']
+    last_indices = batch_out['indices'][:, -1].data.numpy().reshape(1, 1)
+
+    end = text.find('@@EOS@@')
+    if end != -1:
+        text = text[:end]
+    else:
+        while True:
+            batch_out = model(last_indices, init_states=state, disallow_unk=True, unroll_length=100)
+            new_text = batch_out['text'][0]
+            end = new_text.find('@@EOS@@')
+            state = batch_out['final_state']
+            last_indices = batch_out['indices'][:, -1].data.numpy().reshape(1, 1)
+            if end != -1:
+                new_text = new_text[:end]
+                text += new_text
+                break
+            else:
+                text += new_text
+    return '%s %s' % (prompt_text.rstrip(' '), cleanup(text))
+
     
 if __name__ == "__main__":
 
@@ -63,9 +94,11 @@ if __name__ == "__main__":
         if message.content.startswith('!'):
             for summon_command in SUMMON_COMMANDS:
                 if message.content.startswith(summon_command):
-                    summoned = True
-                    break
-        if summoned:
-            await client.send_message(message.channel, get_pasta(model))
+                    if re.match(r'\w', message.content[len(summon_command):]):
+                        msg = get_pasta_with_prompt(model, message.content[len(summon_command):].lstrip(' '))
+                    else:
+                        msg = get_pasta(model)
+                    await client.send_message(message.channel, msg)
+                    return
     
     client.run(input('Token: '))
