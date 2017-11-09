@@ -94,6 +94,7 @@ if __name__ == "__main__":
         if message.content.startswith('!'):
             for summon_command in SUMMON_COMMANDS:
                 if message.content.startswith(summon_command):
+                    await client.send_typing(message.channel)
                     if re.match(r'.*[^\s]', message.content[len(summon_command):]):
                         msg = get_pasta_with_prompt(model, message.content[len(summon_command):].lstrip(' '))
                     else:
