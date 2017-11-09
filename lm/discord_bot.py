@@ -94,7 +94,7 @@ if __name__ == "__main__":
         if message.content.startswith('!'):
             for summon_command in SUMMON_COMMANDS:
                 if message.content.startswith(summon_command):
-                    if re.match(r'.*\w', message.content[len(summon_command):]):
+                    if re.match(r'.*[^\s]', message.content[len(summon_command):]):
                         msg = get_pasta_with_prompt(model, message.content[len(summon_command):].lstrip(' '))
                     else:
                         msg = get_pasta(model)
